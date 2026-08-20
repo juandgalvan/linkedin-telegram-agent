@@ -1,3 +1,12 @@
+# ==============================================================================
+# BOT DE LINKEDIN & TELEGRAM VIA BUFFER - VERSIÓN 1.0.0 (ESTABLE)
+# ==============================================================================
+# Descripción: Genera matrices de contenido para LinkedIn usando Gemini, 
+#              permite aprobación/regeneración/descarte desde Telegram y 
+#              programa las publicaciones en Buffer.
+# Hora de publicación: 09:15 AM CST (15:15 UTC)
+# ==============================================================================
+
 import os
 import json
 import html
@@ -68,15 +77,18 @@ def obtener_modelos_candidatos() -> list[str]:
     logging.info(f"Modelos Flash activos detectados: {candidatos}")
     return candidatos
 
-def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
-    """Calcula la fecha ISO 8601 del próximo día especificado a las 09:00 AM UTC."""
+def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 15, minuto_programado: int = 15) -> str:
+    """
+    Calcula la fecha ISO 8601 del próximo día especificado.
+    Por defecto programa a las 15:15 UTC, que corresponde exactamente a las 09:15 AM hora Centro de México (CST).
+    """
     hoy = datetime.utcnow()
     dia_target = DIAS_MAPA.get(nombre_dia.upper(), 0)
     dias_diferencia = (dia_target - hoy.weekday()) % 7
     if dias_diferencia == 0:
         dias_diferencia = 7  # Programar para la próxima semana si cae hoy
     fecha_target = hoy + timedelta(days=dias_diferencia)
-    fecha_target = fecha_target.replace(hour=hora_programada, minute=0, second=0, microsecond=0)
+    fecha_target = fecha_target.replace(hour=hora_programada, minute=minuto_programado, second=0, microsecond=0)
     return fecha_target.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 def generar_con_respaldo(prompt: str, json_mode: bool = False):
@@ -128,7 +140,7 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     }
     """
     
-    # Valores exactos según la especificación de la API de Buffer
+    # Valores exactos según la especificación de la API GraphQL de Buffer
     variables = {
         "channelId": BUFFER_CHANNEL_ID,
         "text": texto,
@@ -232,7 +244,7 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
         res = enviar_a_buffer(texto_final, fecha_iso=fecha_programada)
         if 'errors' not in res:
             texto_actual_html = html.escape(texto_pantalla)
-            await query.edit_message_text(f"✅ <b>APROBADO Y PROGRAMADO EN BUFFER ({nombre_dia})</b>\n\n{texto_actual_html}", parse_mode="HTML")
+            await query.edit_message_text(f"✅ <b>APROBADO Y PROGRAMADO EN BUFFER ({nombre_dia} - 09:15 AM)</b>\n\n{texto_actual_html}", parse_mode="HTML")
         else:
             texto_actual_html = html.escape(texto_pantalla)
             await query.edit_message_text(f"❌ <b>ERROR BUFFER:</b> {html.escape(str(res))}\n\n{texto_actual_html}", parse_mode="HTML")
@@ -275,5 +287,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("generar", comando_generar))
     app.add_handler(CallbackQueryHandler(manejar_botones))
     
-    print("🤖 Bot listo...")
+    print("🤖 Bot listo (v1.0.0 Stable)...")
     app.run_polling()
