@@ -1,6 +1,7 @@
 import os
 import json
 import html
+import time
 import logging
 import requests
 import threading
@@ -34,17 +35,37 @@ BUFFER_CHANNEL_ID = os.environ.get("BUFFER_CHANNEL_ID")
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-def obtener_ultimo_modelo_flash() -> str:
-    """Consulta la API de Gemini para obtener dinámicamente la última versión Flash estable."""
+def obtener_modelos_candidatos() -> list:
+    """Obtiene una lista ordenada de modelos Flash estables para usar como respaldos en caso de error 503."""
+    candidatos_base = ["gemini-2.5-flash", "gemini-1.5-flash"]
     try:
         modelos = [m.name.replace("models/", "") for m in client.models.list() if "flash" in m.name.lower() and "gemini" in m.name.lower()]
         estables = [m for m in modelos if not any(x in m for x in ["preview", "exp", "thinking", "lite"])]
-        ordenados = sorted(estables or modelos, reverse=True)
+        ordenados = sorted(estables, reverse=True)
         if ordenados:
-            return ordenados[0]
+            return ordenados + [m for m in candidatos_base if m not in ordenados]
     except Exception as e:
-        logging.warning(f"Error detectando modelo dinámico: {e}")
-    return "gemini-3.6-flash"
+        logging.warning(f"Error detectando modelos dinámicos: {e}")
+    return candidatos_base
+
+def generar_con_respaldo(prompt: str, json_mode: bool = False):
+    """Llama a Gemini reintentando con modelos de respaldo si ocurre un error 503 por alta demanda."""
+    modelos = obtener_modelos_candidatos()
+    config = types.GenerateContentConfig(response_mime_type="application/json") if json_mode else None
+
+    ultimo_error = None
+    for modelo in modelos:
+        for intento in range(2):  # Reintento rápido por modelo
+            try:
+                if config:
+                    return client.models.generate_content(model=modelo, contents=prompt, config=config), modelo
+                else:
+                    return client.models.generate_content(model=modelo, contents=prompt), modelo
+            except Exception as e:
+                ultimo_error = e
+                logging.warning(f"Error con modelo {modelo} (intento {intento+1}): {e}")
+                time.sleep(1)  # Pausa breve antes de reintentar
+    raise ultimo_error
 
 def enviar_a_buffer(texto: str) -> dict:
     url = "https://api.bufferapp.com/1/updates/create.json"
@@ -63,8 +84,7 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ No tienes autorización para usar este bot.")
         return
 
-    modelo_activo = obtener_ultimo_modelo_flash()
-    await update.message.reply_text(f"🧠 <b>Generando matriz con {html.escape(modelo_activo)}... Espere un momento.</b>", parse_mode="HTML")
+    await update.message.reply_text("🧠 <b>Generando matriz de contenidos... Espere un momento.</b>", parse_mode="HTML")
 
     prompt = """
     Actúa como un Especialista Senior en Datos. Genera 6 publicaciones profesionales para LinkedIn (Lunes a Sábado).
@@ -88,11 +108,7 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
 
     try:
-        response = client.models.generate_content(
-            model=modelo_activo,
-            contents=prompt,
-            config=types.GenerateContentConfig(response_mime_type="application/json")
-        )
+        response, modelo_usado = generar_con_respaldo(prompt, json_mode=True)
         posts = json.loads(response.text)
         if 'posts' not in context.user_data:
             context.user_data['posts'] = {}
@@ -141,11 +157,10 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif accion == "regenerar":
         if post_item:
             await query.edit_message_text(f"🔄 <b>Regenerando opción para {html.escape(post_item['dia'])} ({html.escape(post_item['tema'])})...</b>", parse_mode="HTML")
-            modelo_activo = obtener_ultimo_modelo_flash()
             prompt = f"Actúa como Especialista Senior en Datos. Genera un post alternativo para LinkedIn sobre el día {post_item['dia']} enfocado en {post_item['tema']}. Devuelve SOLO el texto plano del post."
             
             try:
-                response = client.models.generate_content(model=modelo_activo, contents=prompt)
+                response, modelo_usado = generar_con_respaldo(prompt, json_mode=False)
                 nuevo_post = response.text.strip()
                 post_item['post'] = nuevo_post
                 context.user_data['posts'][index] = post_item
@@ -177,5 +192,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("generar", comando_generar))
     app.add_handler(CallbackQueryHandler(manejar_botones))
     
-    print("🤖 Bot de LinkedIn escuchando peticiones en Telegram con botón de regeneración...")
+    print("🤖 Bot de LinkedIn escuchando peticiones en Telegram con tolerancia a fallos 503...")
     app.run_polling()
