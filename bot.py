@@ -49,24 +49,25 @@ DIAS_MAPA = {
 
 def obtener_modelo_flash_reciente() -> str:
     """
-    Consulta dinámicamente la API de Google para detectar la versión 'flash' 
-    más reciente y activa en tu cuenta sin depender de nombres fijos en texto.
+    Consulta dinámicamente la API de Google para detectar el modelo Flash estándar más reciente,
+    descartando modelos especiales tipo omni, experimental, preview o thinking.
     """
     try:
         modelos_disponibles = []
         for m in client.models.list():
             nombre = m.name.replace("models/", "") if hasattr(m, "name") else str(m)
-            if "flash" in nombre.lower() and "experimental" not in nombre.lower():
+            nombre_lower = nombre.lower()
+            
+            # Filtramos únicamente modelos flash estándar de producción
+            if "flash" in nombre_lower and not any(x in nombre_lower for x in ["omni", "experimental", "exp", "preview", "thinking", "lite"]):
                 modelos_disponibles.append(nombre)
         
-        # Ordenamos alfabéticamente/numéricamente para seleccionar el más reciente (ej. 3.6, 3.7)
         if modelos_disponibles:
             modelos_disponibles.sort(reverse=True)
             return modelos_disponibles[0]
     except Exception as e:
         logging.warning(f"No se pudo listar modelos dinámicamente: {e}")
     
-    # Modelo por defecto en caso de fallback
     return "gemini-3.6-flash"
 
 def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
@@ -82,7 +83,7 @@ def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
 
 def generar_con_respaldo(prompt: str, json_mode: bool = False):
     """
-    Genera contenido seleccionando automáticamente el último modelo Flash disponible.
+    Genera contenido seleccionando automáticamente el modelo Flash de producción adecuado.
     """
     modelo_dinamico = obtener_modelo_flash_reciente()
     logging.info(f"Usando modelo detectado dinámicamente: {modelo_dinamico}")
@@ -124,7 +125,6 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     }
     """
     
-    # schedulingType configurado como "custom" para publicaciones agendadas
     variables = {
         "channelId": BUFFER_CHANNEL_ID,
         "text": texto,
@@ -273,3 +273,4 @@ if __name__ == '__main__':
     
     print("🤖 Bot listo...")
     app.run_polling()
+    
