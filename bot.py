@@ -58,7 +58,6 @@ def obtener_modelos_candidatos() -> list[str]:
             nombre = m.name.replace("models/", "") if hasattr(m, "name") else str(m)
             nombre_lower = nombre.lower()
             
-            # Filtramos solo modelos Flash activos
             if "flash" in nombre_lower and not any(x in nombre_lower for x in ["omni", "experimental", "exp", "preview", "thinking", "lite"]):
                 candidatos.append(nombre)
         
@@ -138,7 +137,7 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
         "channelId": BUFFER_CHANNEL_ID,
         "text": texto,
         "mode": "customScheduled" if fecha_iso else "queue",
-        "schedulingType": "SCHEDULED" if fecha_iso else "QUEUE"
+        "schedulingType": "customScheduled" if fecha_iso else "queue"
     }
     
     if fecha_iso:
