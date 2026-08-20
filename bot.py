@@ -1,5 +1,6 @@
 import os
 import json
+import html
 import logging
 import requests
 import threading
@@ -37,8 +38,8 @@ def obtener_ultimo_modelo_flash() -> str:
     """Consulta la API de Gemini para obtener dinámicamente la última versión Flash estable."""
     try:
         modelos = [m.name.replace("models/", "") for m in client.models.list() if "flash" in m.name.lower() and "gemini" in m.name.lower()]
-        # Filtrar modelos experimentales o de prueba para asegurar estabilidad
-        estables = [m for m in modelos if not any(x in m for x in ["preview", "exp", "thinking"])]
+        # Filtrar modelos experimentales, preview, thinking y lite para asegurar estabilidad
+        estables = [m for m in modelos if not any(x in m for x in ["preview", "exp", "thinking", "lite"])]
         ordenados = sorted(estables or modelos, reverse=True)
         if ordenados:
             return ordenados[0]
@@ -64,7 +65,7 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     modelo_activo = obtener_ultimo_modelo_flash()
-    await update.message.reply_text(f"🧠 *Generando matriz con {modelo_activo}... Espere un momento.*", parse_mode="Markdown")
+    await update.message.reply_text(f"🧠 <b>Generando matriz con {html.escape(modelo_activo)}... Espere un momento.</b>", parse_mode="HTML")
 
     prompt = """
     Actúa como un Especialista Senior en Datos. Genera 6 publicaciones profesionales para LinkedIn (Lunes a Sábado).
@@ -97,7 +98,11 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['posts'] = {i: p for i, p in enumerate(posts)}
 
         for index, item in enumerate(posts):
-            mensaje = f"📌 *{item['dia'].upper()}* ({item['tema']})\n\n{item['post']}"
+            dia_limpio = html.escape(str(item['dia']).upper())
+            tema_limpio = html.escape(str(item['tema']))
+            post_limpio = html.escape(str(item['post']))
+
+            mensaje = f"📌 <b>{dia_limpio}</b> ({tema_limpio})\n\n{post_limpio}"
             keyboard = [
                 [
                     InlineKeyboardButton("✅ Aprobar", callback_data=f"aprobar_{index}"),
@@ -105,10 +110,10 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(mensaje, reply_markup=reply_markup, parse_mode="Markdown")
+            await update.message.reply_text(mensaje, reply_markup=reply_markup, parse_mode="HTML")
 
     except Exception as e:
-        await update.message.reply_text(f"❌ Error al generar la matriz con {modelo_activo}: {str(e)}")
+        await update.message.reply_text(f"❌ Error al generar la matriz con {html.escape(modelo_activo)}: {html.escape(str(e))}", parse_mode="HTML")
 
 async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -123,14 +128,17 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if post_item:
             res = enviar_a_buffer(post_item['post'])
             if 'errors' not in res:
-                await query.edit_message_text(f"✅ *APROBADO Y ENVIADO A BUFFER*\n\n{query.message.text}", parse_mode="Markdown")
+                texto_actual = html.escape(query.message.text)
+                await query.edit_message_text(f"✅ <b>APROBADO Y ENVIADO A BUFFER</b>\n\n{texto_actual}", parse_mode="HTML")
             else:
-                await query.edit_message_text(f"❌ *ERROR BUFFER:* {res}\n\n{query.message.text}")
+                texto_actual = html.escape(query.message.text)
+                await query.edit_message_text(f"❌ <b>ERROR BUFFER:</b> {html.escape(str(res))}\n\n{texto_actual}", parse_mode="HTML")
         else:
             await query.edit_message_text("⚠️ No se encontró la información del post.")
 
     elif accion == "descartar":
-        await query.edit_message_text(f"🗑️ *POST DESCARTADO*\n\n~{query.message.text}~", parse_mode="Markdown")
+        texto_actual = html.escape(query.message.text)
+        await query.edit_message_text(f"🗑️ <b>POST DESCARTADO</b>\n\n<s>{texto_actual}</s>", parse_mode="HTML")
 
 if __name__ == '__main__':
     threading.Thread(target=iniciar_servidor_salud, daemon=True).start()
@@ -139,5 +147,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("generar", comando_generar))
     app.add_handler(CallbackQueryHandler(manejar_botones))
     
-    print("🤖 Bot de LinkedIn escuchando peticiones en Telegram con selección dinámica de modelo...")
+    print("🤖 Bot de LinkedIn escuchando peticiones en Telegram con parseo seguro HTML...")
     app.run_polling()
