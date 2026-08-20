@@ -96,12 +96,12 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     }
     
     query = """
-    mutation CreatePost($channelId: String!, $text: String!, $scheduledAt: String) {
+    mutation CreatePost($channelId: ChannelId!, $text: String!, $dueAt: String, $schedulingType: SchedulingType!) {
       createPost(input: {
         channelId: $channelId,
         text: $text,
-        scheduledAt: $scheduledAt,
-        mode: customScheduled
+        dueAt: $dueAt,
+        schedulingType: $schedulingType
       }) {
         ... on PostActionSuccess {
           post {
@@ -109,7 +109,7 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
             text
           }
         }
-        ... on PostActionError {
+        ... on MutationError {
           message
         }
       }
@@ -118,11 +118,12 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     
     variables = {
         "channelId": BUFFER_CHANNEL_ID,
-        "text": texto
+        "text": texto,
+        "schedulingType": "customScheduled" if fecha_iso else "next"
     }
     
     if fecha_iso:
-        variables["scheduledAt"] = fecha_iso
+        variables["dueAt"] = fecha_iso
 
     try:
         res = requests.post(url, headers=headers, json={"query": query, "variables": variables})
