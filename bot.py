@@ -12,7 +12,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 from google import genai
 from google.genai import types
 
-# Servidor de salud para plan Free de Render
+# Servidor de salud para el plan Free de Render
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -48,10 +48,7 @@ DIAS_MAPA = {
 }
 
 def obtener_modelos_candidatos() -> list[str]:
-    """
-    Consulta la API de Google en tiempo real para obtener únicamente los modelos
-    Flash de producción verdaderamente activos.
-    """
+    """Consulta la API de Google en tiempo real para obtener modelos Flash activos."""
     candidatos = []
     try:
         for m in client.models.list():
@@ -83,9 +80,7 @@ def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
     return fecha_target.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 def generar_con_respaldo(prompt: str, json_mode: bool = False):
-    """
-    Genera contenido recorriendo la lista de modelos candidatos con reintentos automáticos ante 503.
-    """
+    """Genera contenido recorriendo los modelos candidatos con reintentos."""
     candidatos = obtener_modelos_candidatos()
     config = types.GenerateContentConfig(response_mime_type="application/json") if json_mode else None
     
@@ -133,11 +128,12 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     }
     """
     
+    # Valores exactos según la especificación de la API de Buffer
     variables = {
         "channelId": BUFFER_CHANNEL_ID,
         "text": texto,
-        "mode": "customScheduled" if fecha_iso else "queue",
-        "schedulingType": "customScheduled" if fecha_iso else "queue"
+        "schedulingType": "automatic",
+        "mode": "customScheduled" if fecha_iso else "addToQueue"
     }
     
     if fecha_iso:
