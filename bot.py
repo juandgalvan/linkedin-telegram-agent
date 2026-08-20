@@ -33,6 +33,19 @@ BUFFER_CHANNEL_ID = os.environ.get("BUFFER_CHANNEL_ID")
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
+def obtener_ultimo_modelo_flash() -> str:
+    """Consulta la API de Gemini para obtener dinámicamente la última versión Flash estable."""
+    try:
+        modelos = [m.name.replace("models/", "") for m in client.models.list() if "flash" in m.name.lower() and "gemini" in m.name.lower()]
+        # Filtrar modelos experimentales o de prueba para asegurar estabilidad
+        estables = [m for m in modelos if not any(x in m for x in ["preview", "exp", "thinking"])]
+        ordenados = sorted(estables or modelos, reverse=True)
+        if ordenados:
+            return ordenados[0]
+    except Exception as e:
+        logging.warning(f"Error detectando modelo dinámico: {e}")
+    return "gemini-3.6-flash"
+
 def enviar_a_buffer(texto: str) -> dict:
     url = "https://api.bufferapp.com/1/updates/create.json"
     payload = {
@@ -50,7 +63,8 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ No tienes autorización para usar este bot.")
         return
 
-    await update.message.reply_text("🧠 *Generando la matriz semanal de LinkedIn con Gemini... Espere un momento.*", parse_mode="Markdown")
+    modelo_activo = obtener_ultimo_modelo_flash()
+    await update.message.reply_text(f"🧠 *Generando matriz con {modelo_activo}... Espere un momento.*", parse_mode="Markdown")
 
     prompt = """
     Actúa como un Especialista Senior en Datos. Genera 6 publicaciones profesionales para LinkedIn (Lunes a Sábado).
@@ -75,7 +89,7 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=modelo_activo,
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json")
         )
@@ -94,7 +108,7 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(mensaje, reply_markup=reply_markup, parse_mode="Markdown")
 
     except Exception as e:
-        await update.message.reply_text(f"❌ Error al generar la matriz: {str(e)}")
+        await update.message.reply_text(f"❌ Error al generar la matriz con {modelo_activo}: {str(e)}")
 
 async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -119,12 +133,11 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"🗑️ *POST DESCARTADO*\n\n~{query.message.text}~", parse_mode="Markdown")
 
 if __name__ == '__main__':
-    # Hilo secundario para engañar a Render Free
     threading.Thread(target=iniciar_servidor_salud, daemon=True).start()
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("generar", comando_generar))
     app.add_handler(CallbackQueryHandler(manejar_botones))
     
-    print("🤖 Bot de LinkedIn escuchando peticiones en Telegram...")
+    print("🤖 Bot de LinkedIn escuchando peticiones en Telegram con selección dinámica de modelo...")
     app.run_polling()
