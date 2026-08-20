@@ -5,6 +5,7 @@ import time
 import logging
 import requests
 import threading
+from datetime import datetime, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -35,8 +36,29 @@ BUFFER_CHANNEL_ID = os.environ.get("BUFFER_CHANNEL_ID")
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
+DIAS_MAPA = {
+    "LUNES": 0,
+    "MARTES": 1,
+    "MIÉRCOLES": 2,
+    "MIERCOLES": 2,
+    "JUEVES": 3,
+    "VIERNES": 4,
+    "SÁBADO": 5,
+    "SABADO": 5
+}
+
+def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
+    """Calcula la fecha ISO 8601 del próximo día especificado a las 09:00 AM."""
+    hoy = datetime.utcnow()
+    dia_target = DIAS_MAPA.get(nombre_dia.upper(), 0)
+    dias_diferencia = (dia_target - hoy.weekday()) % 7
+    if dias_diferencia == 0:
+        dias_diferencia = 7  # Programar para la próxima semana si cae hoy
+    fecha_target = hoy + timedelta(days=dias_diferencia)
+    fecha_target = fecha_target.replace(hour=hora_programada, minute=0, second=0, microsecond=0)
+    return fecha_target.strftime("%Y-%m-%dT%H:%M:%SZ")
+
 def obtener_modelos_candidatos() -> list:
-    """Obtiene una lista ordenada de modelos Flash estables para usar como respaldos en caso de error 503."""
     candidatos_base = ["gemini-2.5-flash", "gemini-1.5-flash"]
     try:
         modelos = [m.name.replace("models/", "") for m in client.models.list() if "flash" in m.name.lower() and "gemini" in m.name.lower()]
@@ -49,13 +71,12 @@ def obtener_modelos_candidatos() -> list:
     return candidatos_base
 
 def generar_con_respaldo(prompt: str, json_mode: bool = False):
-    """Llama a Gemini reintentando con modelos de respaldo si ocurre un error 503 por alta demanda."""
     modelos = obtener_modelos_candidatos()
     config = types.GenerateContentConfig(response_mime_type="application/json") if json_mode else None
 
     ultimo_error = None
     for modelo in modelos:
-        for intento in range(2):  # Reintento rápido por modelo
+        for intento in range(2):
             try:
                 if config:
                     return client.models.generate_content(model=modelo, contents=prompt, config=config), modelo
@@ -64,10 +85,10 @@ def generar_con_respaldo(prompt: str, json_mode: bool = False):
             except Exception as e:
                 ultimo_error = e
                 logging.warning(f"Error con modelo {modelo} (intento {intento+1}): {e}")
-                time.sleep(1)  # Pausa breve antes de reintentar
+                time.sleep(1)
     raise ultimo_error
 
-def enviar_a_buffer(texto: str) -> dict:
+def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     url = "https://api.bufferapp.com/1/updates/create.json"
     payload = {
         "access_token": BUFFER_TOKEN,
@@ -75,8 +96,26 @@ def enviar_a_buffer(texto: str) -> dict:
         "text": texto,
         "now": False
     }
+    if fecha_iso:
+        payload["scheduled_at"] = fecha_iso
+
     res = requests.post(url, data=payload)
     return res.json()
+
+def extraer_dia_de_texto(texto_mensaje: str) -> str:
+    """Extrae el nombre del día del encabezado del mensaje de Telegram."""
+    for dia in DIAS_MAPA.keys():
+        if dia in texto_mensaje.upper():
+            return dia
+    return "LUNES"
+
+def limpiar_texto_para_buffer(texto_mensaje: str) -> str:
+    """Elimina los encabezados decorativos del mensaje de Telegram antes de enviarlo a Buffer."""
+    lineas = texto_mensaje.strip().split("\n")
+    # Si la primera línea tiene el emoji de pin o el día, la descartamos para publicar solo el contenido
+    if len(lineas) > 1 and ("📌" in lineas[0] or "Aprobado" in lineas[0]):
+        return "\n".join(lineas[1:]).strip()
+    return texto_mensaje.strip()
 
 async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
@@ -110,11 +149,8 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         response, modelo_usado = generar_con_respaldo(prompt, json_mode=True)
         posts = json.loads(response.text)
-        if 'posts' not in context.user_data:
-            context.user_data['posts'] = {}
 
         for index, item in enumerate(posts):
-            context.user_data['posts'][index] = item
             dia_limpio = html.escape(str(item['dia']).upper())
             tema_limpio = html.escape(str(item['tema']))
             post_limpio = html.escape(str(item['post']))
@@ -123,7 +159,7 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [
                 [
                     InlineKeyboardButton("✅ Aprobar", callback_data=f"aprobar_{index}"),
-                    InlineKeyboardButton("🔄 Regenerar", callback_data=f"regenerar_{index}"),
+                    InlineKeyboardButton("🔄 Regenerar", callback_data=f"regenerar_{index}_{dia_limpio}_{tema_limpio}"),
                     InlineKeyboardButton("❌ Descartar", callback_data=f"descartar_{index}")
                 ]
             ]
@@ -137,53 +173,54 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    accion, index_str = query.data.split("_")
-    index = int(index_str)
-    posts = context.user_data.get('posts', {})
-    post_item = posts.get(index)
+    partes = query.data.split("_")
+    accion = partes[0]
 
     if accion == "aprobar":
-        if post_item:
-            res = enviar_a_buffer(post_item['post'])
-            if 'errors' not in res:
-                texto_actual = html.escape(query.message.text)
-                await query.edit_message_text(f"✅ <b>APROBADO Y ENVIADO A BUFFER</b>\n\n{texto_actual}", parse_mode="HTML")
-            else:
-                texto_actual = html.escape(query.message.text)
-                await query.edit_message_text(f"❌ <b>ERROR BUFFER:</b> {html.escape(str(res))}\n\n{texto_actual}", parse_mode="HTML")
+        # Extraer el texto exacto desde la pantalla del mensaje actual en Telegram
+        texto_pantalla = query.message.text
+        texto_final = limpiar_texto_para_buffer(texto_pantalla)
+        nombre_dia = extraer_dia_de_texto(texto_pantalla)
+        fecha_programada = obtener_fecha_proximo_dia(nombre_dia)
+
+        res = enviar_a_buffer(texto_final, fecha_iso=fecha_programada)
+        if 'errors' not in res:
+            texto_actual_html = html.escape(texto_pantalla)
+            await query.edit_message_text(f"✅ <b>APROBADO Y PROGRAMADO EN BUFFER ({nombre_dia})</b>\n\n{texto_actual_html}", parse_mode="HTML")
         else:
-            await query.edit_message_text("⚠️ No se encontró la información del post.")
+            texto_actual_html = html.escape(texto_pantalla)
+            await query.edit_message_text(f"❌ <b>ERROR BUFFER:</b> {html.escape(str(res))}\n\n{texto_actual_html}", parse_mode="HTML")
 
     elif accion == "regenerar":
-        if post_item:
-            await query.edit_message_text(f"🔄 <b>Regenerando opción para {html.escape(post_item['dia'])} ({html.escape(post_item['tema'])})...</b>", parse_mode="HTML")
-            prompt = f"Actúa como Especialista Senior en Datos. Genera un post alternativo para LinkedIn sobre el día {post_item['dia']} enfocado en {post_item['tema']}. Devuelve SOLO el texto plano del post."
-            
-            try:
-                response, modelo_usado = generar_con_respaldo(prompt, json_mode=False)
-                nuevo_post = response.text.strip()
-                post_item['post'] = nuevo_post
-                context.user_data['posts'][index] = post_item
+        dia = partes[2] if len(partes) > 2 else "DÍA"
+        tema = partes[3] if len(partes) > 3 else "DATOS"
 
-                dia_limpio = html.escape(str(post_item['dia']).upper())
-                tema_limpio = html.escape(str(post_item['tema']))
-                post_limpio = html.escape(nuevo_post)
+        await query.edit_message_text(f"🔄 <b>Regenerando opción para {html.escape(dia)} ({html.escape(tema)})...</b>", parse_mode="HTML")
+        prompt = f"Actúa como Especialista Senior en Datos. Genera un post alternativo para LinkedIn sobre {dia} enfocado en {tema}. Devuelve SOLO el texto plano del post."
+        
+        try:
+            response, modelo_usado = generar_con_respaldo(prompt, json_mode=False)
+            nuevo_post = response.text.strip()
 
-                mensaje = f"📌 <b>{dia_limpio}</b> ({tema_limpio})\n\n{post_limpio}"
-                keyboard = [
-                    [
-                        InlineKeyboardButton("✅ Aprobar", callback_data=f"aprobar_{index}"),
-                        InlineKeyboardButton("🔄 Regenerar", callback_data=f"regenerar_{index}"),
-                        InlineKeyboardButton("❌ Descartar", callback_data=f"descartar_{index}")
-                    ]
+            dia_limpio = html.escape(str(dia).upper())
+            tema_limpio = html.escape(str(tema))
+            post_limpio = html.escape(nuevo_post)
+
+            mensaje = f"📌 <b>{dia_limpio}</b> ({tema_limpio})\n\n{post_limpio}"
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Aprobar", callback_data=f"aprobar_0"),
+                    InlineKeyboardButton("🔄 Regenerar", callback_data=f"regenerar_0_{dia_limpio}_{tema_limpio}"),
+                    InlineKeyboardButton("❌ Descartar", callback_data=f"descartar_0")
                 ]
-                await query.edit_message_text(mensaje, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
-            except Exception as e:
-                await query.edit_message_text(f"❌ Error al regenerar: {html.escape(str(e))}", parse_mode="HTML")
+            ]
+            await query.edit_message_text(mensaje, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        except Exception as e:
+            await query.edit_message_text(f"❌ Error al regenerar: {html.escape(str(e))}", parse_mode="HTML")
 
     elif accion == "descartar":
-        texto_actual = html.escape(query.message.text)
-        await query.edit_message_text(f"🗑️ <b>POST DESCARTADO</b>\n\n<s>{texto_actual}</s>", parse_mode="HTML")
+        texto_actual_html = html.escape(query.message.text)
+        await query.edit_message_text(f"🗑️ <b>POST DESCARTADO</b>\n\n<s>{texto_actual_html}</s>", parse_mode="HTML")
 
 if __name__ == '__main__':
     threading.Thread(target=iniciar_servidor_salud, daemon=True).start()
@@ -192,5 +229,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("generar", comando_generar))
     app.add_handler(CallbackQueryHandler(manejar_botones))
     
-    print("🤖 Bot de LinkedIn escuchando peticiones en Telegram con tolerancia a fallos 503...")
+    print("🤖 Bot de LinkedIn con sincronización exacta y fechas programadas listo...")
     app.run_polling()
