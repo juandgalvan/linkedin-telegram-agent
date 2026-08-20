@@ -58,16 +58,14 @@ def obtener_modelos_candidatos() -> list[str]:
             nombre = m.name.replace("models/", "") if hasattr(m, "name") else str(m)
             nombre_lower = nombre.lower()
             
-            # Filtramos solo modelos Flash activos, descartando versiones experimentales o preliminares
+            # Filtramos solo modelos Flash activos
             if "flash" in nombre_lower and not any(x in nombre_lower for x in ["omni", "experimental", "exp", "preview", "thinking", "lite"]):
                 candidatos.append(nombre)
         
-        # Ordena para probar primero la versión más reciente que reporte Google
         candidatos.sort(reverse=True)
     except Exception as e:
         logging.warning(f"No se pudo listar modelos dinámicamente: {e}")
 
-    # Fallback seguro únicamente si la lista dinámica falla
     if not candidatos:
         candidatos = ["gemini-1.5-flash"]
             
@@ -87,8 +85,8 @@ def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
 
 def generar_con_respaldo(prompt: str, json_mode: bool = False):
     """
-    Genera contenido recorriendo únicamente la lista de modelos reales activos.
-    Si el modelo se satura (error 503), hace una pausa corta y reintenta antes de pasar al siguiente.
+    Genera contenido recorriendo la lista de modelos candidatos.
+    Ante errores 503, realiza reintentos y conmutación automática.
     """
     candidatos = obtener_modelos_candidatos()
     config = types.GenerateContentConfig(response_mime_type="application/json") if json_mode else None
@@ -107,7 +105,7 @@ def generar_con_respaldo(prompt: str, json_mode: bool = False):
             except Exception as e:
                 ultimo_error = e
                 logging.warning(f"Error con modelo {modelo} en intento {intento+1}: {e}")
-                time.sleep(2)  # Pausa corta ante picos de demanda antes de reintentar
+                time.sleep(2)
 
     raise ultimo_error
 
@@ -119,13 +117,12 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     }
     
     query = """
-    mutation CreatePost($channelId: ChannelId!, $text: String!, $dueAt: DateTime, $mode: ShareMode!, $schedulingType: SchedulingType!) {
+    mutation CreatePost($channelId: ChannelId!, $text: String!, $dueAt: DateTime, $mode: ShareMode!) {
       createPost(input: {
         channelId: $channelId,
         text: $text,
         dueAt: $dueAt,
-        mode: $mode,
-        schedulingType: $schedulingType
+        mode: $mode
       }) {
         ... on PostActionSuccess {
           post {
@@ -140,8 +137,7 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     variables = {
         "channelId": BUFFER_CHANNEL_ID,
         "text": texto,
-        "mode": "customScheduled" if fecha_iso else "queue",
-        "schedulingType": "scheduled" if fecha_iso else "queue"
+        "mode": "customScheduled" if fecha_iso else "queue"
     }
     
     if fecha_iso:
