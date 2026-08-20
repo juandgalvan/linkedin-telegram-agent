@@ -48,7 +48,7 @@ DIAS_MAPA = {
 }
 
 def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
-    """Calcula la fecha ISO 8601 del próximo día especificado a las 09:00 AM."""
+    """Calcula la fecha ISO 8601 del próximo día especificado a las 09:00 AM UTC."""
     hoy = datetime.utcnow()
     dia_target = DIAS_MAPA.get(nombre_dia.upper(), 0)
     dias_diferencia = (dia_target - hoy.weekday()) % 7
@@ -96,21 +96,18 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     }
     
     query = """
-    mutation CreatePost($channelId: ChannelId!, $text: String!, $dueAt: String, $schedulingType: SchedulingType!) {
+    mutation CreatePost($channelId: ChannelId!, $text: String!, $dueAt: DateTime, $mode: ShareMode!) {
       createPost(input: {
         channelId: $channelId,
         text: $text,
         dueAt: $dueAt,
-        schedulingType: $schedulingType
+        mode: $mode
       }) {
         ... on PostActionSuccess {
           post {
             id
             text
           }
-        }
-        ... on MutationError {
-          message
         }
       }
     }
@@ -119,7 +116,7 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     variables = {
         "channelId": BUFFER_CHANNEL_ID,
         "text": texto,
-        "schedulingType": "customScheduled" if fecha_iso else "next"
+        "mode": "customScheduled" if fecha_iso else "queue"
     }
     
     if fecha_iso:
