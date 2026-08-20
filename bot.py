@@ -47,6 +47,28 @@ DIAS_MAPA = {
     "SABADO": 5
 }
 
+def obtener_modelo_flash_reciente() -> str:
+    """
+    Consulta dinámicamente la API de Google para detectar la versión 'flash' 
+    más reciente y activa en tu cuenta sin depender de nombres fijos en texto.
+    """
+    try:
+        modelos_disponibles = []
+        for m in client.models.list():
+            nombre = m.name.replace("models/", "") if hasattr(m, "name") else str(m)
+            if "flash" in nombre.lower() and "experimental" not in nombre.lower():
+                modelos_disponibles.append(nombre)
+        
+        # Ordenamos alfabéticamente/numéricamente para seleccionar el más reciente (ej. 3.6, 3.7)
+        if modelos_disponibles:
+            modelos_disponibles.sort(reverse=True)
+            return modelos_disponibles[0]
+    except Exception as e:
+        logging.warning(f"No se pudo listar modelos dinámicamente: {e}")
+    
+    # Modelo por defecto en caso de fallback
+    return "gemini-3.6-flash"
+
 def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
     """Calcula la fecha ISO 8601 del próximo día especificado a las 09:00 AM UTC."""
     hoy = datetime.utcnow()
@@ -60,18 +82,20 @@ def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
 
 def generar_con_respaldo(prompt: str, json_mode: bool = False):
     """
-    Utiliza gemini-2.5-flash para asegurar 1,500 solicitudes diarias en el plan gratuito.
+    Genera contenido seleccionando automáticamente el último modelo Flash disponible.
     """
+    modelo_dinamico = obtener_modelo_flash_reciente()
+    logging.info(f"Usando modelo detectado dinámicamente: {modelo_dinamico}")
+    
     config = types.GenerateContentConfig(response_mime_type="application/json") if json_mode else None
-    modelo_estable = "gemini-2.5-flash"
 
     try:
         if config:
-            return client.models.generate_content(model=modelo_estable, contents=prompt, config=config), modelo_estable
+            return client.models.generate_content(model=modelo_dinamico, contents=prompt, config=config), modelo_dinamico
         else:
-            return client.models.generate_content(model=modelo_estable, contents=prompt), modelo_estable
+            return client.models.generate_content(model=modelo_dinamico, contents=prompt), modelo_dinamico
     except Exception as e:
-        logging.error(f"Error generando contenido con {modelo_estable}: {e}")
+        logging.error(f"Error generando contenido con {modelo_dinamico}: {e}")
         raise e
 
 def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
@@ -100,7 +124,7 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     }
     """
     
-    # schedulingType debe ser "custom" para publicaciones agendadas con fecha
+    # schedulingType configurado como "custom" para publicaciones agendadas
     variables = {
         "channelId": BUFFER_CHANNEL_ID,
         "text": texto,
