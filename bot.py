@@ -58,20 +58,9 @@ def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
     fecha_target = fecha_target.replace(hour=hora_programada, minute=0, second=0, microsecond=0)
     return fecha_target.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-def obtener_modelos_candidatos() -> list:
-    candidatos_base = ["gemini-1.5-flash", "gemini-2.0-flash"]
-    try:
-        modelos = [m.name.replace("models/", "") for m in client.models.list() if "flash" in m.name.lower() and "gemini" in m.name.lower()]
-        estables = [m for m in modelos if not any(x in m for x in ["preview", "exp", "thinking", "lite", "2.5"])]
-        ordenados = sorted(estables, reverse=True)
-        if ordenados:
-            return ordenados + [m for m in candidatos_base if m not in ordenados]
-    except Exception as e:
-        logging.warning(f"Error detectando modelos dinámicos: {e}")
-    return candidatos_base
-
 def generar_con_respaldo(prompt: str, json_mode: bool = False):
-    modelos = obtener_modelos_candidatos()
+    # Modelos estables con cuotas gratuitas amplias (1500 req/día)
+    modelos = ["gemini-2.0-flash", "gemini-1.5-flash"]
     config = types.GenerateContentConfig(response_mime_type="application/json") if json_mode else None
 
     ultimo_error = None
@@ -114,11 +103,12 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     }
     """
     
+    # schedulingType acepta "custom" para fechas específicas
     variables = {
         "channelId": BUFFER_CHANNEL_ID,
         "text": texto,
         "mode": "customScheduled" if fecha_iso else "queue",
-        "schedulingType": "customScheduled" if fecha_iso else "next"
+        "schedulingType": "custom" if fecha_iso else "queue"
     }
     
     if fecha_iso:
@@ -260,5 +250,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("generar", comando_generar))
     app.add_handler(CallbackQueryHandler(manejar_botones))
     
-    print("🤖 Bot de LinkedIn con sincronización exacta y fechas programadas listo...")
+    print("🤖 Bot listo...")
     app.run_polling()
