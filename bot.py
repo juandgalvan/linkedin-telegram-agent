@@ -1,9 +1,10 @@
 # ==============================================================================
-# BOT DE LINKEDIN & TELEGRAM VIA BUFFER - VERSIÓN 1.0.0 (ESTABLE)
+# BOT DE LINKEDIN & TELEGRAM VIA BUFFER - VERSIÓN 1.1.0 (WEBHOOK EDITION)
 # ==============================================================================
-# Descripción: Genera matrices de contenido para LinkedIn usando Gemini, 
+# Descripción: Genera matrices de contenido para LinkedIn usando Gemini,
 #              permite aprobación/regeneración/descarte desde Telegram y 
 #              programa las publicaciones en Buffer.
+# Arquitectura: Webhooks nativos + Comando de activación de Cold Start (/despierta).
 # Hora de publicación: 09:15 AM CST (15:15 UTC)
 # ==============================================================================
 
@@ -13,25 +14,11 @@ import html
 import time
 import logging
 import requests
-import threading
 from datetime import datetime, timedelta
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from google import genai
 from google.genai import types
-
-# Servidor de salud para el plan Free de Render
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
-
-def iniciar_servidor_salud():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), HealthHandler)
-    server.serve_forever()
 
 # Configuración de logs
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -42,6 +29,8 @@ ALLOWED_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 BUFFER_TOKEN = os.environ.get("BUFFER_TOKEN")
 BUFFER_CHANNEL_ID = os.environ.get("BUFFER_CHANNEL_ID")
+RENDER_URL = os.environ.get("RENDER_URL") or os.environ.get("RENDER_EXTERNAL_URL")
+PORT = int(os.environ.get("PORT", 8080))
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -140,7 +129,6 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     }
     """
     
-    # Valores exactos según la especificación de la API GraphQL de Buffer
     variables = {
         "channelId": BUFFER_CHANNEL_ID,
         "text": texto,
@@ -175,6 +163,13 @@ def limpiar_texto_para_buffer(texto_mensaje: str) -> str:
     if len(lineas) > 1 and ("📌" in lineas[0] or "Aprobado" in lineas[0]):
         return "\n".join(lineas[1:]).strip()
     return texto_mensaje.strip()
+
+async def comando_despierta(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando ultra ligero para encender el servidor desde reposo sin consumir API de IA."""
+    chat_id = str(update.effective_chat.id)
+    if ALLOWED_CHAT_ID and chat_id != str(ALLOWED_CHAT_ID):
+        return
+    await update.message.reply_text("🟢 <b>Servidor en línea y preparado. Puedes enviar /generar.</b>", parse_mode="HTML")
 
 async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
@@ -281,11 +276,27 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"🗑️ <b>POST DESCARTADO</b>\n\n<s>{texto_actual_html}</s>", parse_mode="HTML")
 
 if __name__ == '__main__':
-    threading.Thread(target=iniciar_servidor_salud, daemon=True).start()
+    if not RENDER_URL:
+        raise ValueError("Error: Debe configurar la variable de entorno RENDER_URL")
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    
+    # Manejadores de Comandos
+    app.add_handler(CommandHandler("despierta", comando_despierta))
     app.add_handler(CommandHandler("generar", comando_generar))
     app.add_handler(CallbackQueryHandler(manejar_botones))
     
-    print("🤖 Bot listo (v1.0.0 Stable)...")
-    app.run_polling()
+    # Configuración de ruta segura para Webhook
+    webhook_path = f"/telegram/{TELEGRAM_TOKEN}"
+    full_webhook_url = f"{RENDER_URL.rstrip('/')}{webhook_path}"
+    
+    logging.info(f"🤖 Iniciando Bot en modo Webhook en: {full_webhook_url}")
+    
+    # Arranca el servidor HTTP en el puerto dinámico de Render y registra la URL en Telegram
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=webhook_path,
+        webhook_url=full_webhook_url,
+        allowed_updates=Update.ALL_TYPES
+    )
