@@ -12,7 +12,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 from google import genai
 from google.genai import types
 
-# Servidor de salud para plan Free de Render
+# Servidor de salud para Render (Plan Free)
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -24,10 +24,10 @@ def iniciar_servidor_salud():
     server = HTTPServer(('0.0.0.0', port), HealthHandler)
     server.serve_forever()
 
-# Configuración de logs
+# Configuración de Logs
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Carga de variables de entorno
+# Variables de entorno
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN_LINKEDIN") or os.environ.get("TELEGRAM_BOT_TOKEN")
 ALLOWED_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -48,15 +48,16 @@ DIAS_MAPA = {
 }
 
 def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
-    """Calcula la fecha ISO 8601 del próximo día especificado a las 09:00 AM."""
-    hoy = datetime.utcnow()
+    """Calcula la fecha para Buffer en formato YYYY-MM-DD HH:MM:SS."""
+    hoy = datetime.now()
     dia_target = DIAS_MAPA.get(nombre_dia.upper(), 0)
     dias_diferencia = (dia_target - hoy.weekday()) % 7
     if dias_diferencia == 0:
-        dias_diferencia = 7  # Programar para la próxima semana si cae hoy
+        dias_diferencia = 7  # Programar para la siguiente semana si es el mismo día
+    
     fecha_target = hoy + timedelta(days=dias_diferencia)
     fecha_target = fecha_target.replace(hour=hora_programada, minute=0, second=0, microsecond=0)
-    return fecha_target.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return fecha_target.strftime("%Y-%m-%d %H:%M:%S")
 
 def obtener_modelos_candidatos() -> list:
     candidatos_base = ["gemini-2.5-flash", "gemini-1.5-flash"]
@@ -88,7 +89,7 @@ def generar_con_respaldo(prompt: str, json_mode: bool = False):
                 time.sleep(1)
     raise ultimo_error
 
-def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
+def enviar_a_buffer(texto: str, fecha_formateada: str = None) -> dict:
     url = "https://api.bufferapp.com/1/updates/create.json"
     payload = {
         "access_token": BUFFER_TOKEN,
@@ -96,24 +97,25 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
         "text": texto,
         "now": False
     }
-    if fecha_iso:
-        payload["scheduled_at"] = fecha_iso
+    if fecha_formateada:
+        payload["scheduled_at"] = fecha_formateada
 
     res = requests.post(url, data=payload)
-    return res.json()
+    logging.info(f"Respuesta Buffer: Status {res.status_code} - Body: {res.text}")
+    try:
+        return res.json()
+    except Exception:
+        return {"error_code": res.status_code, "text": res.text}
 
 def extraer_dia_de_texto(texto_mensaje: str) -> str:
-    """Extrae el nombre del día del encabezado del mensaje de Telegram."""
     for dia in DIAS_MAPA.keys():
         if dia in texto_mensaje.upper():
             return dia
     return "LUNES"
 
 def limpiar_texto_para_buffer(texto_mensaje: str) -> str:
-    """Elimina los encabezados decorativos del mensaje de Telegram antes de enviarlo a Buffer."""
     lineas = texto_mensaje.strip().split("\n")
-    # Si la primera línea tiene el emoji de pin o el día, la descartamos para publicar solo el contenido
-    if len(lineas) > 1 and ("📌" in lineas[0] or "Aprobado" in lineas[0]):
+    if len(lineas) > 1 and ("📌" in lineas[0] or "APROBADO" in lineas[0]):
         return "\n".join(lineas[1:]).strip()
     return texto_mensaje.strip()
 
@@ -177,19 +179,21 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
     accion = partes[0]
 
     if accion == "aprobar":
-        # Extraer el texto exacto desde la pantalla del mensaje actual en Telegram
         texto_pantalla = query.message.text
         texto_final = limpiar_texto_para_buffer(texto_pantalla)
         nombre_dia = extraer_dia_de_texto(texto_pantalla)
         fecha_programada = obtener_fecha_proximo_dia(nombre_dia)
 
-        res = enviar_a_buffer(texto_final, fecha_iso=fecha_programada)
-        if 'errors' not in res:
+        res = enviar_a_buffer(texto_final, fecha_formateada=fecha_programada)
+        
+        # Verificar respuesta exitosa de Buffer
+        if res.get('success') is True or 'updates' in res:
             texto_actual_html = html.escape(texto_pantalla)
             await query.edit_message_text(f"✅ <b>APROBADO Y PROGRAMADO EN BUFFER ({nombre_dia})</b>\n\n{texto_actual_html}", parse_mode="HTML")
         else:
             texto_actual_html = html.escape(texto_pantalla)
-            await query.edit_message_text(f"❌ <b>ERROR BUFFER:</b> {html.escape(str(res))}\n\n{texto_actual_html}", parse_mode="HTML")
+            error_msg = html.escape(str(res))
+            await query.edit_message_text(f"❌ <b>ERROR BUFFER:</b> {error_msg}\n\n{texto_actual_html}", parse_mode="HTML")
 
     elif accion == "regenerar":
         dia = partes[2] if len(partes) > 2 else "DÍA"
@@ -229,5 +233,6 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("generar", comando_generar))
     app.add_handler(CallbackQueryHandler(manejar_botones))
     
-    print("🤖 Bot de LinkedIn con sincronización exacta y fechas programadas listo...")
+    print("🤖 Bot de LinkedIn con formato de fecha corregido listo...")
     app.run_polling()
+    
