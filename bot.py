@@ -129,7 +129,7 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
         "channelId": BUFFER_CHANNEL_ID,
         "text": texto,
         "mode": "customScheduled" if fecha_iso else "queue",
-        "schedulingType": "custom" if fecha_iso else "queue"
+        "schedulingType": "scheduled" if fecha_iso else "queue"
     }
     
     if fecha_iso:
@@ -273,4 +273,3 @@ if __name__ == '__main__':
     
     print("🤖 Bot listo...")
     app.run_polling()
-    
