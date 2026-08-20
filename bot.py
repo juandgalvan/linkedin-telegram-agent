@@ -50,7 +50,7 @@ DIAS_MAPA = {
 def obtener_modelos_candidatos() -> list[str]:
     """
     Consulta la API de Google en tiempo real para obtener únicamente los modelos
-    Flash de producción verdaderamente activos, sin nombres hardcodeados obsoletos.
+    Flash de producción verdaderamente activos.
     """
     candidatos = []
     try:
@@ -85,8 +85,7 @@ def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
 
 def generar_con_respaldo(prompt: str, json_mode: bool = False):
     """
-    Genera contenido recorriendo la lista de modelos candidatos.
-    Ante errores 503, realiza reintentos y conmutación automática.
+    Genera contenido recorriendo la lista de modelos candidatos con reintentos automáticos ante 503.
     """
     candidatos = obtener_modelos_candidatos()
     config = types.GenerateContentConfig(response_mime_type="application/json") if json_mode else None
@@ -117,12 +116,13 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     }
     
     query = """
-    mutation CreatePost($channelId: ChannelId!, $text: String!, $dueAt: DateTime, $mode: ShareMode!) {
+    mutation CreatePost($channelId: ChannelId!, $text: String!, $dueAt: DateTime, $mode: ShareMode!, $schedulingType: SchedulingType!) {
       createPost(input: {
         channelId: $channelId,
         text: $text,
         dueAt: $dueAt,
-        mode: $mode
+        mode: $mode,
+        schedulingType: $schedulingType
       }) {
         ... on PostActionSuccess {
           post {
@@ -137,7 +137,8 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     variables = {
         "channelId": BUFFER_CHANNEL_ID,
         "text": texto,
-        "mode": "customScheduled" if fecha_iso else "queue"
+        "mode": "customScheduled" if fecha_iso else "queue",
+        "schedulingType": "SCHEDULED" if fecha_iso else "QUEUE"
     }
     
     if fecha_iso:
