@@ -48,12 +48,12 @@ DIAS_MAPA = {
 }
 
 def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
-    """Calcula la fecha para Buffer en formato YYYY-MM-DD HH:MM:SS."""
+    """Calcula la fecha para Buffer en formato ISO estándar."""
     hoy = datetime.now()
     dia_target = DIAS_MAPA.get(nombre_dia.upper(), 0)
     dias_diferencia = (dia_target - hoy.weekday()) % 7
     if dias_diferencia == 0:
-        dias_diferencia = 7  # Programar para la siguiente semana si es el mismo día
+        dias_diferencia = 7  # Programar para la siguiente semana si cae hoy
     
     fecha_target = hoy + timedelta(days=dias_diferencia)
     fecha_target = fecha_target.replace(hour=hora_programada, minute=0, second=0, microsecond=0)
@@ -91,21 +91,23 @@ def generar_con_respaldo(prompt: str, json_mode: bool = False):
 
 def enviar_a_buffer(texto: str, fecha_formateada: str = None) -> dict:
     url = "https://api.bufferapp.com/1/updates/create.json"
+    headers = {
+        "Authorization": f"Bearer {BUFFER_TOKEN}"
+    }
     payload = {
-        "access_token": BUFFER_TOKEN,
-        "profile_ids[]": BUFFER_CHANNEL_ID,
+        "profile_ids[]": [BUFFER_CHANNEL_ID],
         "text": texto,
-        "now": False
+        "now": "false"
     }
     if fecha_formateada:
         payload["scheduled_at"] = fecha_formateada
 
-    res = requests.post(url, data=payload)
-    logging.info(f"Respuesta Buffer: Status {res.status_code} - Body: {res.text}")
     try:
+        res = requests.post(url, headers=headers, data=payload)
+        logging.info(f"Respuesta Buffer: Status {res.status_code} - Body: {res.text}")
         return res.json()
-    except Exception:
-        return {"error_code": res.status_code, "text": res.text}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
 
 def extraer_dia_de_texto(texto_mensaje: str) -> str:
     for dia in DIAS_MAPA.keys():
@@ -166,7 +168,7 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(mensaje, reply_markup=reply_markup, parse_mode="HTML")
+            await update.message.reply_text(mensaje, reply_markup=reply_markup, parse_mode="HTML", disable_web_page_preview=True)
 
     except Exception as e:
         await update.message.reply_text(f"❌ Error al generar la matriz: {html.escape(str(e))}", parse_mode="HTML")
@@ -186,20 +188,20 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         res = enviar_a_buffer(texto_final, fecha_formateada=fecha_programada)
         
-        # Verificar respuesta exitosa de Buffer
+        # Validación de respuesta de Buffer
         if res.get('success') is True or 'updates' in res:
             texto_actual_html = html.escape(texto_pantalla)
-            await query.edit_message_text(f"✅ <b>APROBADO Y PROGRAMADO EN BUFFER ({nombre_dia})</b>\n\n{texto_actual_html}", parse_mode="HTML")
+            await query.edit_message_text(f"✅ <b>APROBADO Y PROGRAMADO EN BUFFER ({nombre_dia})</b>\n\n{texto_actual_html}", parse_mode="HTML", disable_web_page_preview=True)
         else:
             texto_actual_html = html.escape(texto_pantalla)
-            error_msg = html.escape(str(res))
-            await query.edit_message_text(f"❌ <b>ERROR BUFFER:</b> {error_msg}\n\n{texto_actual_html}", parse_mode="HTML")
+            error_msg = html.escape(str(res.get('message') or res))
+            await query.edit_message_text(f"❌ <b>ERROR BUFFER:</b> {error_msg}\n\n{texto_actual_html}", parse_mode="HTML", disable_web_page_preview=True)
 
     elif accion == "regenerar":
         dia = partes[2] if len(partes) > 2 else "DÍA"
         tema = partes[3] if len(partes) > 3 else "DATOS"
 
-        await query.edit_message_text(f"🔄 <b>Regenerando opción para {html.escape(dia)} ({html.escape(tema)})...</b>", parse_mode="HTML")
+        await query.edit_message_text(f"🔄 <b>Regenerando opción para {html.escape(dia)} ({html.escape(tema)})...</b>", parse_mode="HTML", disable_web_page_preview=True)
         prompt = f"Actúa como Especialista Senior en Datos. Genera un post alternativo para LinkedIn sobre {dia} enfocado en {tema}. Devuelve SOLO el texto plano del post."
         
         try:
@@ -218,13 +220,13 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     InlineKeyboardButton("❌ Descartar", callback_data=f"descartar_0")
                 ]
             ]
-            await query.edit_message_text(mensaje, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+            await query.edit_message_text(mensaje, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML", disable_web_page_preview=True)
         except Exception as e:
-            await query.edit_message_text(f"❌ Error al regenerar: {html.escape(str(e))}", parse_mode="HTML")
+            await query.edit_message_text(f"❌ Error al regenerar: {html.escape(str(e))}", parse_mode="HTML", disable_web_page_preview=True)
 
     elif accion == "descartar":
         texto_actual_html = html.escape(query.message.text)
-        await query.edit_message_text(f"🗑️ <b>POST DESCARTADO</b>\n\n<s>{texto_actual_html}</s>", parse_mode="HTML")
+        await query.edit_message_text(f"🗑️ <b>POST DESCARTADO</b>\n\n<s>{texto_actual_html}</s>", parse_mode="HTML", disable_web_page_preview=True)
 
 if __name__ == '__main__':
     threading.Thread(target=iniciar_servidor_salud, daemon=True).start()
@@ -233,6 +235,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("generar", comando_generar))
     app.add_handler(CallbackQueryHandler(manejar_botones))
     
-    print("🤖 Bot de LinkedIn con formato de fecha corregido listo...")
+    print("🤖 Bot de LinkedIn listo con autenticación Bearer y vistas previas desactivadas...")
     app.run_polling()
-    
