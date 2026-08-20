@@ -2,26 +2,38 @@ import os
 import json
 import logging
 import requests
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from google import genai
 from google.genai import types
 
+# Servidor de salud para plan Free de Render
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+def iniciar_servidor_salud():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), HealthHandler)
+    server.serve_forever()
+
 # Configuración de logs
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Carga de variables de entorno (Render)
+# Carga de variables de entorno
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN_LINKEDIN") or os.environ.get("TELEGRAM_BOT_TOKEN")
 ALLOWED_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 BUFFER_TOKEN = os.environ.get("BUFFER_TOKEN")
 BUFFER_CHANNEL_ID = os.environ.get("BUFFER_CHANNEL_ID")
 
-# Cliente Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 def enviar_a_buffer(texto: str) -> dict:
-    """Envía la publicación aprobada a la cola de Buffer."""
     url = "https://api.bufferapp.com/1/updates/create.json"
     payload = {
         "access_token": BUFFER_TOKEN,
@@ -33,7 +45,6 @@ def enviar_a_buffer(texto: str) -> dict:
     return res.json()
 
 async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Genera la parrilla semanal y envía los posts con botones interactivos."""
     chat_id = str(update.effective_chat.id)
     if ALLOWED_CHAT_ID and chat_id != str(ALLOWED_CHAT_ID):
         await update.message.reply_text("⛔ No tienes autorización para usar este bot.")
@@ -86,7 +97,6 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error al generar la matriz: {str(e)}")
 
 async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja los clics en los botones de Aprobar o Descartar."""
     query = update.callback_query
     await query.answer()
 
@@ -109,6 +119,9 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"🗑️ *POST DESCARTADO*\n\n~{query.message.text}~", parse_mode="Markdown")
 
 if __name__ == '__main__':
+    # Hilo secundario para engañar a Render Free
+    threading.Thread(target=iniciar_servidor_salud, daemon=True).start()
+
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("generar", comando_generar))
     app.add_handler(CallbackQueryHandler(manejar_botones))
