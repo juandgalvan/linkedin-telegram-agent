@@ -47,28 +47,32 @@ DIAS_MAPA = {
     "SABADO": 5
 }
 
-def obtener_modelo_flash_reciente() -> str:
+def obtener_modelos_candidatos() -> list[str]:
     """
-    Consulta dinámicamente la API de Google para detectar el modelo Flash estándar más reciente,
-    descartando modelos especiales tipo omni, experimental, preview o thinking.
+    Consulta la API de Google en tiempo real para obtener únicamente los modelos
+    Flash de producción verdaderamente activos, sin nombres hardcodeados obsoletos.
     """
+    candidatos = []
     try:
-        modelos_disponibles = []
         for m in client.models.list():
             nombre = m.name.replace("models/", "") if hasattr(m, "name") else str(m)
             nombre_lower = nombre.lower()
             
-            # Filtramos únicamente modelos flash estándar de producción
+            # Filtramos solo modelos Flash activos, descartando versiones experimentales o preliminares
             if "flash" in nombre_lower and not any(x in nombre_lower for x in ["omni", "experimental", "exp", "preview", "thinking", "lite"]):
-                modelos_disponibles.append(nombre)
+                candidatos.append(nombre)
         
-        if modelos_disponibles:
-            modelos_disponibles.sort(reverse=True)
-            return modelos_disponibles[0]
+        # Ordena para probar primero la versión más reciente que reporte Google
+        candidatos.sort(reverse=True)
     except Exception as e:
         logging.warning(f"No se pudo listar modelos dinámicamente: {e}")
-    
-    return "gemini-3.6-flash"
+
+    # Fallback seguro únicamente si la lista dinámica falla
+    if not candidatos:
+        candidatos = ["gemini-1.5-flash"]
+            
+    logging.info(f"Modelos Flash activos detectados: {candidatos}")
+    return candidatos
 
 def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
     """Calcula la fecha ISO 8601 del próximo día especificado a las 09:00 AM UTC."""
@@ -83,21 +87,29 @@ def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
 
 def generar_con_respaldo(prompt: str, json_mode: bool = False):
     """
-    Genera contenido seleccionando automáticamente el modelo Flash de producción adecuado.
+    Genera contenido recorriendo únicamente la lista de modelos reales activos.
+    Si el modelo se satura (error 503), hace una pausa corta y reintenta antes de pasar al siguiente.
     """
-    modelo_dinamico = obtener_modelo_flash_reciente()
-    logging.info(f"Usando modelo detectado dinámicamente: {modelo_dinamico}")
-    
+    candidatos = obtener_modelos_candidatos()
     config = types.GenerateContentConfig(response_mime_type="application/json") if json_mode else None
+    
+    ultimo_error = None
 
-    try:
-        if config:
-            return client.models.generate_content(model=modelo_dinamico, contents=prompt, config=config), modelo_dinamico
-        else:
-            return client.models.generate_content(model=modelo_dinamico, contents=prompt), modelo_dinamico
-    except Exception as e:
-        logging.error(f"Error generando contenido con {modelo_dinamico}: {e}")
-        raise e
+    for modelo in candidatos:
+        for intento in range(2):
+            try:
+                logging.info(f"Intentando generar con modelo: {modelo} (intento {intento+1})")
+                if config:
+                    res = client.models.generate_content(model=modelo, contents=prompt, config=config)
+                else:
+                    res = client.models.generate_content(model=modelo, contents=prompt)
+                return res, modelo
+            except Exception as e:
+                ultimo_error = e
+                logging.warning(f"Error con modelo {modelo} en intento {intento+1}: {e}")
+                time.sleep(2)  # Pausa corta ante picos de demanda antes de reintentar
+
+    raise ultimo_error
 
 def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     url = "https://api.buffer.com"
