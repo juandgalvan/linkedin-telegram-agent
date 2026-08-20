@@ -2,8 +2,8 @@ import os
 import requests
 import json
 import logging
-import pytz
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from google import genai
@@ -36,7 +36,7 @@ DIAS_PUBLICACION = {
 }
 
 def obtener_siguiente_fecha():
-    tz = pytz.timezone('America/Mexico_City')
+    tz = ZoneInfo('America/Mexico_City')
     ahora = datetime.now(tz)
     
     # Calcular días faltantes para el siguiente día hábil
