@@ -48,7 +48,7 @@ DIAS_MAPA = {
 }
 
 def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
-    """Calcula la fecha para Buffer en formato ISO estándar."""
+    """Calcula la fecha para Buffer en formato YYYY-MM-DD HH:MM:SS."""
     hoy = datetime.now()
     dia_target = DIAS_MAPA.get(nombre_dia.upper(), 0)
     dias_diferencia = (dia_target - hoy.weekday()) % 7
@@ -90,24 +90,51 @@ def generar_con_respaldo(prompt: str, json_mode: bool = False):
     raise ultimo_error
 
 def enviar_a_buffer(texto: str, fecha_formateada: str = None) -> dict:
-    url = "https://api.bufferapp.com/1/updates/create.json"
+    url = "https://api.buffer.com"
     headers = {
-        "Authorization": f"Bearer {BUFFER_TOKEN}"
+        "Authorization": f"Bearer {BUFFER_TOKEN}",
+        "Content-Type": "application/json"
     }
-    payload = {
-        "profile_ids[]": [BUFFER_CHANNEL_ID],
-        "text": texto,
-        "now": "false"
+    
+    query = """
+    mutation CreatePost($channelId: RecordId!, $text: String!, $dueAt: ISO8601DateTime) {
+      createPost(input: {
+        channelId: $channelId,
+        text: $text,
+        dueAt: $dueAt,
+        schedulingType: custom
+      }) {
+        post {
+          id
+          text
+        }
+        userErrors {
+          field
+          message
+        }
+      }
     }
+    """
+    
+    variables = {
+        "channelId": BUFFER_CHANNEL_ID,
+        "text": texto
+    }
+    
     if fecha_formateada:
-        payload["scheduled_at"] = fecha_formateada
+        fecha_iso = fecha_formateada.replace(" ", "T") + "Z"
+        variables["dueAt"] = fecha_iso
 
     try:
-        res = requests.post(url, headers=headers, data=payload)
-        logging.info(f"Respuesta Buffer: Status {res.status_code} - Body: {res.text}")
-        return res.json()
+        res = requests.post(url, headers=headers, json={"query": query, "variables": variables})
+        logging.info(f"Respuesta Buffer GraphQL: Status {res.status_code} - Body: {res.text}")
+        data = res.json()
+        
+        if "errors" in data or data.get("data", {}).get("createPost", {}).get("userErrors"):
+            return {"success": False, "error": data}
+        return {"success": True, "data": data}
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        return {"success": False, "error": str(e)}
 
 def extraer_dia_de_texto(texto_mensaje: str) -> str:
     for dia in DIAS_MAPA.keys():
@@ -188,13 +215,12 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         res = enviar_a_buffer(texto_final, fecha_formateada=fecha_programada)
         
-        # Validación de respuesta de Buffer
-        if res.get('success') is True or 'updates' in res:
+        if res.get('success') is True:
             texto_actual_html = html.escape(texto_pantalla)
             await query.edit_message_text(f"✅ <b>APROBADO Y PROGRAMADO EN BUFFER ({nombre_dia})</b>\n\n{texto_actual_html}", parse_mode="HTML", disable_web_page_preview=True)
         else:
             texto_actual_html = html.escape(texto_pantalla)
-            error_msg = html.escape(str(res.get('message') or res))
+            error_msg = html.escape(str(res.get('error')))
             await query.edit_message_text(f"❌ <b>ERROR BUFFER:</b> {error_msg}\n\n{texto_actual_html}", parse_mode="HTML", disable_web_page_preview=True)
 
     elif accion == "regenerar":
@@ -235,5 +261,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("generar", comando_generar))
     app.add_handler(CallbackQueryHandler(manejar_botones))
     
-    print("🤖 Bot de LinkedIn listo con autenticación Bearer y vistas previas desactivadas...")
+    print("🤖 Bot de LinkedIn migrado exitosamente a Buffer GraphQL API...")
     app.run_polling()
