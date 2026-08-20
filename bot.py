@@ -59,23 +59,21 @@ def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
     return fecha_target.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 def generar_con_respaldo(prompt: str, json_mode: bool = False):
-    # Modelos estables con cuotas gratuitas amplias (1500 req/día)
-    modelos = ["gemini-2.0-flash", "gemini-1.5-flash"]
+    """
+    Usa 'gemini-flash-latest' para que Google seleccione en automático 
+    la versión estable más reciente sin requerir mantenimiento manual.
+    """
     config = types.GenerateContentConfig(response_mime_type="application/json") if json_mode else None
+    modelo_dinamico = "gemini-flash-latest"
 
-    ultimo_error = None
-    for modelo in modelos:
-        for intento in range(2):
-            try:
-                if config:
-                    return client.models.generate_content(model=modelo, contents=prompt, config=config), modelo
-                else:
-                    return client.models.generate_content(model=modelo, contents=prompt), modelo
-            except Exception as e:
-                ultimo_error = e
-                logging.warning(f"Error con modelo {modelo} (intento {intento+1}): {e}")
-                time.sleep(1)
-    raise ultimo_error
+    try:
+        if config:
+            return client.models.generate_content(model=modelo_dinamico, contents=prompt, config=config), modelo_dinamico
+        else:
+            return client.models.generate_content(model=modelo_dinamico, contents=prompt), modelo_dinamico
+    except Exception as e:
+        logging.error(f"Error generando contenido con {modelo_dinamico}: {e}")
+        raise e
 
 def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     url = "https://api.buffer.com"
@@ -103,7 +101,7 @@ def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
     }
     """
     
-    # schedulingType acepta "custom" para fechas específicas
+    # schedulingType debe ser "custom" para publicaciones agendadas con fecha
     variables = {
         "channelId": BUFFER_CHANNEL_ID,
         "text": texto,
