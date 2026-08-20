@@ -60,19 +60,18 @@ def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
 
 def generar_con_respaldo(prompt: str, json_mode: bool = False):
     """
-    Usa 'gemini-flash-latest' para que Google seleccione en automático 
-    la versión estable más reciente sin requerir mantenimiento manual.
+    Utiliza gemini-2.5-flash para asegurar 1,500 solicitudes diarias en el plan gratuito.
     """
     config = types.GenerateContentConfig(response_mime_type="application/json") if json_mode else None
-    modelo_dinamico = "gemini-flash-latest"
+    modelo_estable = "gemini-2.5-flash"
 
     try:
         if config:
-            return client.models.generate_content(model=modelo_dinamico, contents=prompt, config=config), modelo_dinamico
+            return client.models.generate_content(model=modelo_estable, contents=prompt, config=config), modelo_estable
         else:
-            return client.models.generate_content(model=modelo_dinamico, contents=prompt), modelo_dinamico
+            return client.models.generate_content(model=modelo_estable, contents=prompt), modelo_estable
     except Exception as e:
-        logging.error(f"Error generando contenido con {modelo_dinamico}: {e}")
+        logging.error(f"Error generando contenido con {modelo_estable}: {e}")
         raise e
 
 def enviar_a_buffer(texto: str, fecha_iso: str = None) -> dict:
