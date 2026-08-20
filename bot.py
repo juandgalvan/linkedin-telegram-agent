@@ -38,7 +38,6 @@ def obtener_ultimo_modelo_flash() -> str:
     """Consulta la API de Gemini para obtener dinámicamente la última versión Flash estable."""
     try:
         modelos = [m.name.replace("models/", "") for m in client.models.list() if "flash" in m.name.lower() and "gemini" in m.name.lower()]
-        # Filtrar modelos experimentales, preview, thinking y lite para asegurar estabilidad
         estables = [m for m in modelos if not any(x in m for x in ["preview", "exp", "thinking", "lite"])]
         ordenados = sorted(estables or modelos, reverse=True)
         if ordenados:
@@ -95,9 +94,11 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             config=types.GenerateContentConfig(response_mime_type="application/json")
         )
         posts = json.loads(response.text)
-        context.user_data['posts'] = {i: p for i, p in enumerate(posts)}
+        if 'posts' not in context.user_data:
+            context.user_data['posts'] = {}
 
         for index, item in enumerate(posts):
+            context.user_data['posts'][index] = item
             dia_limpio = html.escape(str(item['dia']).upper())
             tema_limpio = html.escape(str(item['tema']))
             post_limpio = html.escape(str(item['post']))
@@ -106,6 +107,7 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [
                 [
                     InlineKeyboardButton("✅ Aprobar", callback_data=f"aprobar_{index}"),
+                    InlineKeyboardButton("🔄 Regenerar", callback_data=f"regenerar_{index}"),
                     InlineKeyboardButton("❌ Descartar", callback_data=f"descartar_{index}")
                 ]
             ]
@@ -113,7 +115,7 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(mensaje, reply_markup=reply_markup, parse_mode="HTML")
 
     except Exception as e:
-        await update.message.reply_text(f"❌ Error al generar la matriz con {html.escape(modelo_activo)}: {html.escape(str(e))}", parse_mode="HTML")
+        await update.message.reply_text(f"❌ Error al generar la matriz: {html.escape(str(e))}", parse_mode="HTML")
 
 async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -136,6 +138,34 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text("⚠️ No se encontró la información del post.")
 
+    elif accion == "regenerar":
+        if post_item:
+            await query.edit_message_text(f"🔄 <b>Regenerando opción para {html.escape(post_item['dia'])} ({html.escape(post_item['tema'])})...</b>", parse_mode="HTML")
+            modelo_activo = obtener_ultimo_modelo_flash()
+            prompt = f"Actúa como Especialista Senior en Datos. Genera un post alternativo para LinkedIn sobre el día {post_item['dia']} enfocado en {post_item['tema']}. Devuelve SOLO el texto plano del post."
+            
+            try:
+                response = client.models.generate_content(model=modelo_activo, contents=prompt)
+                nuevo_post = response.text.strip()
+                post_item['post'] = nuevo_post
+                context.user_data['posts'][index] = post_item
+
+                dia_limpio = html.escape(str(post_item['dia']).upper())
+                tema_limpio = html.escape(str(post_item['tema']))
+                post_limpio = html.escape(nuevo_post)
+
+                mensaje = f"📌 <b>{dia_limpio}</b> ({tema_limpio})\n\n{post_limpio}"
+                keyboard = [
+                    [
+                        InlineKeyboardButton("✅ Aprobar", callback_data=f"aprobar_{index}"),
+                        InlineKeyboardButton("🔄 Regenerar", callback_data=f"regenerar_{index}"),
+                        InlineKeyboardButton("❌ Descartar", callback_data=f"descartar_{index}")
+                    ]
+                ]
+                await query.edit_message_text(mensaje, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+            except Exception as e:
+                await query.edit_message_text(f"❌ Error al regenerar: {html.escape(str(e))}", parse_mode="HTML")
+
     elif accion == "descartar":
         texto_actual = html.escape(query.message.text)
         await query.edit_message_text(f"🗑️ <b>POST DESCARTADO</b>\n\n<s>{texto_actual}</s>", parse_mode="HTML")
@@ -147,5 +177,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("generar", comando_generar))
     app.add_handler(CallbackQueryHandler(manejar_botones))
     
-    print("🤖 Bot de LinkedIn escuchando peticiones en Telegram con parseo seguro HTML...")
+    print("🤖 Bot de LinkedIn escuchando peticiones en Telegram con botón de regeneración...")
     app.run_polling()
