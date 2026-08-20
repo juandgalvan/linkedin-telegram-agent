@@ -1,93 +1,78 @@
 import os
-import json
-import html
-import time
-import logging
 import requests
-import threading
-from datetime import datetime, timedelta
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import json
+import logging
+import pytz
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from google import genai
-from google.genai import types
 
-# Servidor de salud para Render (Plan Free)
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
-
-def iniciar_servidor_salud():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), HealthHandler)
-    server.serve_forever()
-
-# Configuración de Logs
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# Configuración de Logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
 # Variables de entorno
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN_LINKEDIN") or os.environ.get("TELEGRAM_BOT_TOKEN")
-ALLOWED_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 BUFFER_TOKEN = os.environ.get("BUFFER_TOKEN")
 BUFFER_CHANNEL_ID = os.environ.get("BUFFER_CHANNEL_ID")
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+# Configurar cliente de Gemini (librería oficial google-genai)
+client_gemini = genai.Client(api_key=GEMINI_API_KEY)
 
-DIAS_MAPA = {
-    "LUNES": 0,
-    "MARTES": 1,
-    "MIÉRCOLES": 2,
-    "MIERCOLES": 2,
-    "JUEVES": 3,
-    "VIERNES": 4,
-    "SÁBADO": 5,
-    "SABADO": 5
+# Estructura temporal para almacenar los posts pendientes de aprobación por chat
+POSTS_PENDIENTES = {}
+
+# Días de publicación configurables
+DIAS_PUBLICACION = {
+    0: "LUNES (SQL)",
+    1: "MARTES (PYTHON)",
+    2: "MIÉRCOLES (POWER BI / DAX)",
+    3: "JUEVES (SQL)",
+    4: "VIERNES (PYTHON)"
 }
 
-def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 9) -> str:
-    """Calcula la fecha para Buffer en formato YYYY-MM-DD HH:MM:SS."""
-    hoy = datetime.now()
-    dia_target = DIAS_MAPA.get(nombre_dia.upper(), 0)
-    dias_diferencia = (dia_target - hoy.weekday()) % 7
-    if dias_diferencia == 0:
-        dias_diferencia = 7  # Programar para la siguiente semana si cae hoy
+def obtener_siguiente_fecha():
+    tz = pytz.timezone('America/Mexico_City')
+    ahora = datetime.now(tz)
     
-    fecha_target = hoy + timedelta(days=dias_diferencia)
-    fecha_target = fecha_target.replace(hour=hora_programada, minute=0, second=0, microsecond=0)
-    return fecha_target.strftime("%Y-%m-%d %H:%M:%S")
+    # Calcular días faltantes para el siguiente día hábil
+    dias_para_sumar = 1
+    siguiente_dt = ahora
+    
+    while True:
+        siguiente_dt = ahora.replace(hour=8, minute=0, second=0, microsecond=0)
+        from datetime import timedelta
+        siguiente_dt += timedelta(days=dias_para_sumar)
+        
+        # 0: Lunes, 1: Martes, 2: Miércoles, 3: Jueves, 4: Viernes
+        if siguiente_dt.weekday() in DIAS_PUBLICACION:
+            break
+        dias_para_sumar += 1
+        
+    tema = DIAS_PUBLICACION[siguiente_dt.weekday()]
+    fecha_formateada = siguiente_dt.strftime("%Y-%m-%d %H:%M:%S")
+    return fecha_formateada, tema
 
-def obtener_modelos_candidatos() -> list:
-    candidatos_base = ["gemini-2.5-flash", "gemini-1.5-flash"]
-    try:
-        modelos = [m.name.replace("models/", "") for m in client.models.list() if "flash" in m.name.lower() and "gemini" in m.name.lower()]
-        estables = [m for m in modelos if not any(x in m for x in ["preview", "exp", "thinking", "lite"])]
-        ordenados = sorted(estables, reverse=True)
-        if ordenados:
-            return ordenados + [m for m in candidatos_base if m not in ordenados]
-    except Exception as e:
-        logging.warning(f"Error detectando modelos dinámicos: {e}")
-    return candidatos_base
-
-def generar_con_respaldo(prompt: str, json_mode: bool = False):
-    modelos = obtener_modelos_candidatos()
-    config = types.GenerateContentConfig(response_mime_type="application/json") if json_mode else None
-
-    ultimo_error = None
-    for modelo in modelos:
-        for intento in range(2):
-            try:
-                if config:
-                    return client.models.generate_content(model=modelo, contents=prompt, config=config), modelo
-                else:
-                    return client.models.generate_content(model=modelo, contents=prompt), modelo
-            except Exception as e:
-                ultimo_error = e
-                logging.warning(f"Error con modelo {modelo} (intento {intento+1}): {e}")
-                time.sleep(1)
-    raise ultimo_error
+def generar_contenido_gemini(tema: str) -> str:
+    prompt = f"""
+    Eres un experto creador de contenido técnico y Data Analyst.
+    Genera una publicación atractiva para LinkedIn enfocada en el tema del día: {tema}.
+    
+    Reglas:
+    1. Debe ser técnica, profesional pero cercana.
+    2. Incluye un ejemplo práctico de código, consulta o buenas prácticas si aplica.
+    3. Incluye hashtags relevantes al final (#DataAnalytics #PowerBI #Python #SQL #DataEngineering).
+    4. Usa un tono narrativo fluido, profesional y conciso.
+    """
+    response = client_gemini.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt
+    )
+    return response.text.strip()
 
 def enviar_a_buffer(texto: str, fecha_formateada: str = None) -> dict:
     url = "https://api.buffer.com"
@@ -96,20 +81,22 @@ def enviar_a_buffer(texto: str, fecha_formateada: str = None) -> dict:
         "Content-Type": "application/json"
     }
     
+    # Mutación GraphQL ajustada al esquema exacto de Buffer
     query = """
-    mutation CreatePost($channelId: RecordId!, $text: String!, $dueAt: ISO8601DateTime) {
+    mutation CreatePost($channelId: String!, $text: String!, $scheduledAt: String) {
       createPost(input: {
         channelId: $channelId,
         text: $text,
-        dueAt: $dueAt,
-        schedulingType: custom
+        scheduledAt: $scheduledAt,
+        mode: customScheduled
       }) {
-        post {
-          id
-          text
+        ... on PostActionSuccess {
+          post {
+            id
+            text
+          }
         }
-        userErrors {
-          field
+        ... on PostActionError {
           message
         }
       }
@@ -122,144 +109,93 @@ def enviar_a_buffer(texto: str, fecha_formateada: str = None) -> dict:
     }
     
     if fecha_formateada:
+        # Convertir 'YYYY-MM-DD HH:MM:SS' a formato ISO8601 con zona horaria Z
         fecha_iso = fecha_formateada.replace(" ", "T") + "Z"
-        variables["dueAt"] = fecha_iso
+        variables["scheduledAt"] = fecha_iso
 
     try:
         res = requests.post(url, headers=headers, json={"query": query, "variables": variables})
         logging.info(f"Respuesta Buffer GraphQL: Status {res.status_code} - Body: {res.text}")
         data = res.json()
         
-        if "errors" in data or data.get("data", {}).get("createPost", {}).get("userErrors"):
+        # Verificar si existen errores devueltos por GraphQL
+        if "errors" in data or "message" in data.get("data", {}).get("createPost", {}):
             return {"success": False, "error": data}
         return {"success": True, "data": data}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-def extraer_dia_de_texto(texto_mensaje: str) -> str:
-    for dia in DIAS_MAPA.keys():
-        if dia in texto_mensaje.upper():
-            return dia
-    return "LUNES"
-
-def limpiar_texto_para_buffer(texto_mensaje: str) -> str:
-    lineas = texto_mensaje.strip().split("\n")
-    if len(lineas) > 1 and ("📌" in lineas[0] or "APROBADO" in lineas[0]):
-        return "\n".join(lineas[1:]).strip()
-    return texto_mensaje.strip()
-
-async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    if ALLOWED_CHAT_ID and chat_id != str(ALLOWED_CHAT_ID):
-        await update.message.reply_text("⛔ No tienes autorización para usar este bot.")
-        return
-
-    await update.message.reply_text("🧠 <b>Generando matriz de contenidos... Espere un momento.</b>", parse_mode="HTML")
-
-    prompt = """
-    Actúa como un Especialista Senior en Datos. Genera 6 publicaciones profesionales para LinkedIn (Lunes a Sábado).
-    Estructura temática:
-    - Lunes: SQL / Optimización.
-    - Martes: Power BI / DAX.
-    - Miércoles: ETL / Modelado Dimensional.
-    - Jueves: Microsoft Fabric / Azure.
-    - Viernes: Automatización Python.
-    - Sábado: Sábado Geek (Cultura pop, cómics, cine de culto, tecnología o lógica).
-
-    Devuelve STRICTAMENTE un JSON con este formato:
-    [
-      {"dia": "Lunes", "tema": "SQL", "post": "Contenido completo..."},
-      {"dia": "Martes", "tema": "Power BI", "post": "Contenido completo..."},
-      {"dia": "Miércoles", "tema": "ETL", "post": "Contenido completo..."},
-      {"dia": "Jueves", "tema": "Microsoft Fabric", "post": "Contenido completo..."},
-      {"dia": "Viernes", "tema": "Python", "post": "Contenido completo..."},
-      {"dia": "Sábado", "tema": "Sábado Geek", "post": "Contenido completo..."}
+async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    await context.bot.send_message(chat_id=chat_id, text="🧠 Generando matriz de contenidos... Espere un momento.")
+    
+    fecha, tema = obtener_siguiente_fecha()
+    contenido = generar_contenido_gemini(tema)
+    
+    # Guardar temporalmente la propuesta
+    POSTS_PENDIENTES[chat_id] = {
+        "texto": contenido,
+        "fecha": fecha,
+        "tema": tema
+    }
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Aprobar y Programar", callback_data="aprobar_post"),
+            InlineKeyboardButton("🔄 Regenerar", callback_data="regenerar_post")
+        ]
     ]
-    """
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    mensaje = f"📌 **{tema}**\n📅 Programación sugerida: `{fecha}`\n\n---\n\n{contenido}"
+    await context.bot.send_message(chat_id=chat_id, text=mensaje, parse_mode="Markdown", reply_markup=reply_markup)
 
-    try:
-        response, modelo_usado = generar_con_respaldo(prompt, json_mode=True)
-        posts = json.loads(response.text)
-
-        for index, item in enumerate(posts):
-            dia_limpio = html.escape(str(item['dia']).upper())
-            tema_limpio = html.escape(str(item['tema']))
-            post_limpio = html.escape(str(item['post']))
-
-            mensaje = f"📌 <b>{dia_limpio}</b> ({tema_limpio})\n\n{post_limpio}"
-            keyboard = [
-                [
-                    InlineKeyboardButton("✅ Aprobar", callback_data=f"aprobar_{index}"),
-                    InlineKeyboardButton("🔄 Regenerar", callback_data=f"regenerar_{index}_{dia_limpio}_{tema_limpio}"),
-                    InlineKeyboardButton("❌ Descartar", callback_data=f"descartar_{index}")
-                ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(mensaje, reply_markup=reply_markup, parse_mode="HTML", disable_web_page_preview=True)
-
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error al generar la matriz: {html.escape(str(e))}", parse_mode="HTML")
-
-async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def manejar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
-    partes = query.data.split("_")
-    accion = partes[0]
-
-    if accion == "aprobar":
-        texto_pantalla = query.message.text
-        texto_final = limpiar_texto_para_buffer(texto_pantalla)
-        nombre_dia = extraer_dia_de_texto(texto_pantalla)
-        fecha_programada = obtener_fecha_proximo_dia(nombre_dia)
-
-        res = enviar_a_buffer(texto_final, fecha_formateada=fecha_programada)
-        
-        if res.get('success') is True:
-            texto_actual_html = html.escape(texto_pantalla)
-            await query.edit_message_text(f"✅ <b>APROBADO Y PROGRAMADO EN BUFFER ({nombre_dia})</b>\n\n{texto_actual_html}", parse_mode="HTML", disable_web_page_preview=True)
-        else:
-            texto_actual_html = html.escape(texto_pantalla)
-            error_msg = html.escape(str(res.get('error')))
-            await query.edit_message_text(f"❌ <b>ERROR BUFFER:</b> {error_msg}\n\n{texto_actual_html}", parse_mode="HTML", disable_web_page_preview=True)
-
-    elif accion == "regenerar":
-        dia = partes[2] if len(partes) > 2 else "DÍA"
-        tema = partes[3] if len(partes) > 3 else "DATOS"
-
-        await query.edit_message_text(f"🔄 <b>Regenerando opción para {html.escape(dia)} ({html.escape(tema)})...</b>", parse_mode="HTML", disable_web_page_preview=True)
-        prompt = f"Actúa como Especialista Senior en Datos. Genera un post alternativo para LinkedIn sobre {dia} enfocado en {tema}. Devuelve SOLO el texto plano del post."
-        
-        try:
-            response, modelo_usado = generar_con_respaldo(prompt, json_mode=False)
-            nuevo_post = response.text.strip()
-
-            dia_limpio = html.escape(str(dia).upper())
-            tema_limpio = html.escape(str(tema))
-            post_limpio = html.escape(nuevo_post)
-
-            mensaje = f"📌 <b>{dia_limpio}</b> ({tema_limpio})\n\n{post_limpio}"
-            keyboard = [
-                [
-                    InlineKeyboardButton("✅ Aprobar", callback_data=f"aprobar_0"),
-                    InlineKeyboardButton("🔄 Regenerar", callback_data=f"regenerar_0_{dia_limpio}_{tema_limpio}"),
-                    InlineKeyboardButton("❌ Descartar", callback_data=f"descartar_0")
-                ]
-            ]
-            await query.edit_message_text(mensaje, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML", disable_web_page_preview=True)
-        except Exception as e:
-            await query.edit_message_text(f"❌ Error al regenerar: {html.escape(str(e))}", parse_mode="HTML", disable_web_page_preview=True)
-
-    elif accion == "descartar":
-        texto_actual_html = html.escape(query.message.text)
-        await query.edit_message_text(f"🗑️ <b>POST DESCARTADO</b>\n\n<s>{texto_actual_html}</s>", parse_mode="HTML", disable_web_page_preview=True)
-
-if __name__ == '__main__':
-    threading.Thread(target=iniciar_servidor_salud, daemon=True).start()
-
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("generar", comando_generar))
-    app.add_handler(CallbackQueryHandler(manejar_botones))
     
-    print("🤖 Bot de LinkedIn migrado exitosamente a Buffer GraphQL API...")
+    chat_id = query.message.chat.id
+    data = query.data
+    
+    if data == "aprobar_post":
+        post_info = POSTS_PENDIENTES.get(chat_id)
+        if not post_info:
+            await query.edit_message_text("❌ No hay ninguna propuesta activa para aprobar.")
+            return
+            
+        await query.edit_message_text("🚀 Enviando propuesta a Buffer vía GraphQL...")
+        
+        resultado = enviar_a_buffer(post_info["texto"], post_info["fecha"])
+        
+        if resultado["success"]:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"✅ **¡Publicación programada exitosamente en Buffer!**\n📅 Fecha: `{post_info['fecha']}`",
+                parse_mode="Markdown"
+            )
+            POSTS_PENDIENTES.pop(chat_id, None)
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"❌ **ERROR BUFFER:** `{resultado['error']}`",
+                parse_mode="Markdown"
+            )
+            
+    elif data == "regenerar_post":
+        await query.edit_message_text("🔄 Regenerando propuesta de contenido...")
+        await cmd_generar(update, context)
+
+def main():
+    if not TELEGRAM_TOKEN:
+        raise ValueError("TELEGRAM_TOKEN no está configurado.")
+        
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    
+    app.add_handler(CommandHandler("generar", cmd_generar))
+    app.add_handler(CallbackQueryHandler(manejar_callback))
+    
+    logging.info("Bot iniciando polling...")
     app.run_polling()
+
+if __name__ == "__main__":
+    main()
