@@ -1,34 +1,65 @@
-# linkedin-telegram-agent
-Agente interactivo para generación y aprobación de contenido en LinkedIn con Telegram y Gemini API
+# linkedin-telegram-agent (v1.2.0 - Bilingual Edition)
 
-# Agente Automático de LinkedIn (Telegram + Gemini + Buffer)
+Agente interactivo de marca personal en LinkedIn impulsado por **Python**, **Google Gemini API**, **Telegram** y **Buffer GraphQL API**.
 
-Bot de Telegram desarrollado en Python para la generación, revisión y programación automatizada de contenidos profesionales de datos para LinkedIn.
+---
 
-## 🚀 Arquitectura y Flujo de Trabajo
+## 🚀 Descripción del Proyecto
 
-1. **Telegram Interface**: El usuario ejecuta `/generar` para solicitar la matriz semanal de contenidos.
-2. **Generación IA (Google Gemini)**: Un cliente dinámico evalúa los modelos disponibles (ej. `gemini-2.0-flash`, `gemini-1.5-flash`) y retorna 6 posts temáticos estructurados en formato JSON.
-3. **Validación Interactiva**: Telegram despliega Inline Keyboards con opciones para **Aprobar**, **Regenerar** o **Descartar** cada publicación individualmente.
-4. **Programación Automatizada**: Al aprobar, el bot calcula la fecha del próximo día correspondiente (Lunes a Sábado a las 09:00 AM UTC) y la envía a la **API GraphQL v2 de Buffer**.
-5. **Despliegue Continuo**: Alojado en Render con un servidor de salud HTTP integrado para garantizar el estado activo en instancias Free.
+Este agente automatiza el flujo completo de creación, revisión y publicación de contenidos técnicos en LinkedIn. Genera matrices semanales bilingües (Español + 🇺🇸 Inglés), permite la aprobación o regeneración en tiempo real desde Telegram y programa automáticamente las publicaciones en Buffer respetando los horarios óptimos de audiencia.
+
+---
+
+## 🏗️ Arquitectura y Flujo de Trabajo
+
+1. **Cold Start & Despertador (`/despierta`):** Comando ultra ligero que levanta la instancia en Render deshabilitando el estado de reposo (*cold start*) sin consumir llamadas a la API de Inteligencia Artificial.
+2. **Generación Bilingüe (`/generar`):** Un motor dinámico evalúa los modelos activos de Google Gemini (priorizando la serie *Flash*) y genera 6 publicaciones adaptadas en formato JSON bilingüe (Español + 🇺🇸 English Version).
+3. **Validación Interactiva en Telegram:** Muestra una vista previa en Telegram con botones interactivos (*Inline Keyboards*) para **Aprobar**, **Regenerar** opción por opción o **Descartar**.
+4. **Programación en Buffer:** Al pulsar **Aprobar**, el bot calcula la fecha exacta del día objetivo a las **09:15 AM CST** (15:15 UTC) y la envía mediante una mutación GraphQL a la API v2 de Buffer.
+5. **Webhooks Nativos en la Nube:** Servidor HTTP integrado que registra Webhooks nativos con Telegram, eliminando la necesidad de navegadores o ejecuciones locales.
+
+---
 
 ## 🛠️ Variables de Entorno Requeridas
 
+Configura las siguientes variables en Render (o tu entorno `.env` local):
+
 | Variable | Descripción |
 | :--- | :--- |
-| `TELEGRAM_BOT_TOKEN_LINKEDIN` | Token de acceso del Bot en Telegram. |
-| `TELEGRAM_CHAT_ID` | ID de chat permitido para restringir el uso del bot. |
-| `GEMINI_API_KEY` | API Key de Google Gemini AI Studio. |
-| `BUFFER_TOKEN` | Access Token de la API GraphQL de Buffer. |
-| `BUFFER_CHANNEL_ID` | ID del canal de LinkedIn configurado en Buffer. |
-| `PORT` | Puerto asignado automáticamente por Render para el Health Check. |
+| `TELEGRAM_BOT_TOKEN_LINKEDIN` | Token de acceso otorgado por `@BotFather`. |
+| `TELEGRAM_CHAT_ID` | ID único de tu usuario para restringir el uso exclusivo del bot. |
+| `GEMINI_API_KEY` | API Key otorgada por Google AI Studio. |
+| `BUFFER_TOKEN` | Bearer Access Token para autenticación en la API de Buffer. |
+| `BUFFER_CHANNEL_ID` | ID del canal de LinkedIn vinculado en Buffer. |
+| `RENDER_URL` | URL pública externa de la app en Render (ej. `https://tu-app.onrender.com`). |
+| `PORT` | Puerto asignado automáticamente por el entorno de Render (por defecto `8080`). |
+
+---
 
 ## 📅 Estructura Temática Semanal
 
-* **Lunes**: SQL / Optimización de Consultas.
-* **Martes**: Power BI / DAX.
-* **Miércoles**: ETL / Modelado Dimensional.
-* **Jueves**: Microsoft Fabric / Azure.
-* **Viernes**: Automatización con Python.
-* **Sábado**: Sábado Geek (Cultura pop, cómics, cine de culto o lógica).
+* 📌 **Lunes:** SQL & Optimización de Consultas (SARGability, Planes de Ejecución).
+* 📌 **Martes:** Power BI & DAX (Transición de Contexto, Optimización de Modelos).
+* 📌 **Miércoles:** ETL & Modelado Dimensional (Star Schema, Surrogate Keys).
+* 📌 **Jueves:** Microsoft Fabric & Azure Data Architecture.
+* 📌 **Viernes:** Automatización con Python (Pandas, Scripts de Productividad).
+* 📌 **Sábado:** Sábado Geek (Cultura pop, cine de culto, lógica o cómics aplicados a datos).
+
+---
+
+## 📝 Formato Bilingüe de Salida
+
+Cada post individual programado en Buffer y LinkedIn sigue una estructura limpia en un solo bloque de publicación:
+
+```text
+🚀 [Título y Contenido Técnico en Español]
+...
+#HashtagsEnEspañol #HashtagsTécnicos
+
+──────────────────────────────
+🇺🇸 ENGLISH VERSION
+──────────────────────────────
+
+🚀 [Technical Title & Adapted Content in English]
+...
+#HashtagsInEnglish #TechnicalHashtags
