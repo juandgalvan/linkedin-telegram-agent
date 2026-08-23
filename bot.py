@@ -1,9 +1,9 @@
 # ==============================================================================
-# BOT DE LINKEDIN & TELEGRAM VIA BUFFER - VERSIÓN 1.1.0 (WEBHOOK EDITION)
+# BOT DE LINKEDIN & TELEGRAM VIA BUFFER - VERSIÓN 1.2.0 (BILINGUAL EDITION)
 # ==============================================================================
-# Descripción: Genera matrices de contenido para LinkedIn usando Gemini,
-#              permite aprobación/regeneración/descarte desde Telegram y 
-#              programa las publicaciones en Buffer.
+# Descripción: Genera matrices de contenido bilingües (Español e Inglés 🇺🇸) 
+#              para LinkedIn usando Gemini, permite aprobación/regeneración/descarte
+#              desde Telegram y programa las publicaciones en Buffer.
 # Arquitectura: Webhooks nativos + Comando de activación de Cold Start (/despierta).
 # Hora de publicación: 09:15 AM CST (15:15 UTC)
 # ==============================================================================
@@ -177,7 +177,7 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ No tienes autorización para usar este bot.")
         return
 
-    await update.message.reply_text("🧠 <b>Generando matriz de contenidos... Espere un momento.</b>", parse_mode="HTML")
+    await update.message.reply_text("🧠 <b>Generando matriz de contenidos bilingüe... Espere un momento.</b>", parse_mode="HTML")
 
     prompt = """
     Actúa como un Especialista Senior en Datos. Genera 6 publicaciones profesionales para LinkedIn (Lunes a Sábado).
@@ -189,14 +189,33 @@ async def comando_generar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     - Viernes: Automatización Python.
     - Sábado: Sábado Geek (Cultura pop, cómics, cine de culto, tecnología o lógica).
 
+    REQUISITO OBLIGATORIO DE FORMATO PARA EL CAMPO "post":
+    Cada publicación DEBE ser estrictamente bilingüe (Español primero, seguido de la versión en Inglés con bandera de EE. UU.), estructurada exactamente así:
+
+    [Título con emoji y tema en Español]
+
+    [Contenido técnico claro y al grano en Español: problema, solución práctica con tips o código breve, y pregunta para generar debate]
+
+    #HashtagsEnEspañol #HashtagsTécnicos
+
+    ──────────────────────────────
+    🇺🇸 ENGLISH VERSION
+    ──────────────────────────────
+
+    [Título adaptado con emoji en Inglés]
+
+    [Contenido técnico adaptado en Inglés técnico natural, sin traducciones literales, con tips o código y pregunta final]
+
+    #HashtagsInEnglish #TechnicalHashtags
+
     Devuelve STRICTAMENTE un JSON con este formato:
     [
-      {"dia": "Lunes", "tema": "SQL", "post": "Contenido completo..."},
-      {"dia": "Martes", "tema": "Power BI", "post": "Contenido completo..."},
-      {"dia": "Miércoles", "tema": "ETL", "post": "Contenido completo..."},
-      {"dia": "Jueves", "tema": "Microsoft Fabric", "post": "Contenido completo..."},
-      {"dia": "Viernes", "tema": "Python", "post": "Contenido completo..."},
-      {"dia": "Sábado", "tema": "Sábado Geek", "post": "Contenido completo..."}
+      {"dia": "Lunes", "tema": "SQL", "post": "Contenido bilingüe completo..."},
+      {"dia": "Martes", "tema": "Power BI", "post": "Contenido bilingüe completo..."},
+      {"dia": "Miércoles", "tema": "ETL", "post": "Contenido bilingüe completo..."},
+      {"dia": "Jueves", "tema": "Microsoft Fabric", "post": "Contenido bilingüe completo..."},
+      {"dia": "Viernes", "tema": "Python", "post": "Contenido bilingüe completo..."},
+      {"dia": "Sábado", "tema": "Sábado Geek", "post": "Contenido bilingüe completo..."}
     ]
     """
 
@@ -248,8 +267,32 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
         dia = partes[2] if len(partes) > 2 else "DÍA"
         tema = partes[3] if len(partes) > 3 else "DATOS"
 
-        await query.edit_message_text(f"🔄 <b>Regenerando opción para {html.escape(dia)} ({html.escape(tema)})...</b>", parse_mode="HTML")
-        prompt = f"Actúa como Especialista Senior en Datos. Genera un post alternativo para LinkedIn sobre {dia} enfocado en {tema}. Devuelve SOLO el texto plano del post."
+        await query.edit_message_text(f"🔄 <b>Regenerando opción bilingüe para {html.escape(dia)} ({html.escape(tema)})...</b>", parse_mode="HTML")
+        
+        prompt = f"""
+        Actúa como Especialista Senior en Datos. Genera un post alternativo profesional para LinkedIn para el día {dia} enfocado en {tema}.
+
+        REQUISITO OBLIGATORIO DE FORMATO:
+        El post DEBE ser estrictamente bilingüe estructurado exactamente así:
+
+        [Título con emoji y tema en Español]
+
+        [Contenido técnico en Español: problema, solución práctica con tips o código y pregunta para debate]
+
+        #HashtagsEnEspañol #HashtagsTécnicos
+
+        ──────────────────────────────
+        🇺🇸 ENGLISH VERSION
+        ──────────────────────────────
+
+        [Título adaptado con emoji en Inglés]
+
+        [Contenido técnico adaptado en Inglés técnico natural, sin traducciones literales]
+
+        #HashtagsInEnglish #TechnicalHashtags
+
+        Devuelve SOLO el texto plano del post bilingüe sin comillas ni JSON adicionales.
+        """
         
         try:
             response, modelo_usado = generar_con_respaldo(prompt, json_mode=False)
