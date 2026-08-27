@@ -1,20 +1,22 @@
 # ==============================================================================
-# BOT DE LINKEDIN & TELEGRAM VIA BUFFER - VERSIÓN 1.2.0 (BILINGUAL EDITION)
+# BOT DE LINKEDIN & TELEGRAM VIA BUFFER - VERSIÓN 1.2.1 (PRODUCTION READY)
 # ==============================================================================
 # Descripción: Genera matrices de contenido bilingües (Español e Inglés 🇺🇸) 
-#              para LinkedIn usando Gemini, permite aprobación/regeneración/descarte
-#              desde Telegram y programa las publicaciones en Buffer.
+# para LinkedIn usando Gemini, permite aprobación/regeneración/descarte
+# desde Telegram y programa las publicaciones en Buffer.
 # Arquitectura: Webhooks nativos + Comando de activación de Cold Start (/despierta).
 # Hora de publicación: 09:15 AM CST (15:15 UTC)
+# Parches V1.2.1: Sanitización Regex para Buffer + Timezone UTC compliant.
 # ==============================================================================
 
 import os
+import re
 import json
 import html
 import time
 import logging
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from google import genai
@@ -55,27 +57,27 @@ def obtener_modelos_candidatos() -> list[str]:
             
             if "flash" in nombre_lower and not any(x in nombre_lower for x in ["omni", "experimental", "exp", "preview", "thinking", "lite"]):
                 candidatos.append(nombre)
-        
+            
         candidatos.sort(reverse=True)
     except Exception as e:
         logging.warning(f"No se pudo listar modelos dinámicamente: {e}")
 
     if not candidatos:
         candidatos = ["gemini-1.5-flash"]
-            
+        
     logging.info(f"Modelos Flash activos detectados: {candidatos}")
     return candidatos
 
 def obtener_fecha_proximo_dia(nombre_dia: str, hora_programada: int = 15, minuto_programado: int = 15) -> str:
     """
-    Calcula la fecha ISO 8601 del próximo día especificado.
-    Por defecto programa a las 15:15 UTC, que corresponde exactamente a las 09:15 AM hora Centro de México (CST).
+    Calcula la fecha ISO 8601 del próximo día especificado usando timezone.utc (Python 3.12+ compliant).
+    Por defecto programa a las 15:15 UTC, que corresponde a las 09:15 AM CST.
     """
-    hoy = datetime.utcnow()
+    hoy = datetime.now(timezone.utc)
     dia_target = DIAS_MAPA.get(nombre_dia.upper(), 0)
     dias_diferencia = (dia_target - hoy.weekday()) % 7
     if dias_diferencia == 0:
-        dias_diferencia = 7  # Programar para la próxima semana si cae hoy
+        dias_diferencia = 7 
     fecha_target = hoy + timedelta(days=dias_diferencia)
     fecha_target = fecha_target.replace(hour=hora_programada, minute=minuto_programado, second=0, microsecond=0)
     return fecha_target.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -158,11 +160,17 @@ def extraer_dia_de_texto(texto_mensaje: str) -> str:
     return "LUNES"
 
 def limpiar_texto_para_buffer(texto_mensaje: str) -> str:
-    """Elimina los encabezados decorativos del mensaje de Telegram antes de enviarlo a Buffer."""
+    """
+    Sanitiza el texto para Buffer:
+    1. Remueve el encabezado decorativo de Telegram.
+    2. Elimina marcas HTML (<b>, <i>, etc.) mediante expresiones regulares.
+    """
     lineas = texto_mensaje.strip().split("\n")
-    if len(lineas) > 1 and ("📌" in lineas[0] or "Aprobado" in lineas[0]):
-        return "\n".join(lineas[1:]).strip()
-    return texto_mensaje.strip()
+    if len(lineas) > 1 and ("📌" in lineas[0] or "APROBADO" in lineas[0].upper()):
+        texto_mensaje = "\n".join(lineas[1:]).strip()
+    
+    texto_limpio = re.sub(r'<[^>]+>', '', texto_mensaje)
+    return texto_limpio.strip()
 
 async def comando_despierta(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando ultra ligero para encender el servidor desde reposo sin consumir API de IA."""
